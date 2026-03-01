@@ -1,0 +1,227 @@
+"""Download service with queue management and progress tracking."""
+import asyncio
+import uuid
+import logging
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, Dict, Callable, Any
+from dataclasses import dataclass, field
+from enum import Enum
+
+from bot.config import config
+
+logger = logging.getLogger(__name__)
+
+
+class DownloadStatus(Enum):
+    """Download status enum."""
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class DownloadTask:
+    """Download task data class."""
+    task_id: str
+    user_id: int
+    url: str
+    format_id: str
+    mode: str  # video, audio, live
+    status: DownloadStatus = DownloadStatus.PENDING
+    progress_callback: Optional[Callable] = None
+    file_path: Optional[str] = None
+    error: Optional[str] = None
+    progress: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+
+
+class DownloadManager:
+    """Singleton download manager with queue system."""
+    
+    _instance = None
+    _lock = asyncio.Lock()
+    
+    def __init__(self):
+        self._tasks: Dict[str, DownloadTask] = {}
+        self._user_tasks: Dict[int, list] = {}
+        self._results: Dict[str, asyncio.Future] = {}
+    
+    @classmethod
+    def get_instance(cls) -> "DownloadManager":
+        """Get singleton instance."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+    
+    def add_download(
+        self,
+        user_id: int,
+        url: str,
+        format_id: str,
+        mode: str,
+        progress_callback: Optional[Callable] = None
+    ) -> str:
+        """Add a download to the queue."""
+        task_id = str(uuid.uuid4())
+        
+        task = DownloadTask(
+            task_id=task_id,
+            user_id=user_id,
+            url=url,
+            format_id=format_id,
+            mode=mode,
+            progress_callback=progress_callback
+        )
+        
+        self._tasks[task_id] = task
+        
+        if user_id not in self._user_tasks:
+            self._user_tasks[user_id] = []
+        self._user_tasks[user_id].append(task_id)
+        
+        # Create future for result
+        self._results[task_id] = asyncio.get_event_loop().create_future()
+        
+        # Start download task
+        asyncio.create_task(self._run_download(task))
+        
+        return task_id
+    
+    async def _run_download(self, task: DownloadTask):
+        """Run the download in background."""
+        try:
+            task.status = DownloadStatus.DOWNLOADING
+            
+            # Create download command
+            config.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%H%M%S")
+            output_template = str(
+                config.DOWNLOADS_DIR / f"dl_{timestamp}_%(title)s.%(ext)s"
+            )
+            
+            cmd = [
+                "yt-dlp",
+                "-f", task.format_id,
+                "--output", output_template,
+                "--no-playlist",
+                "--progress-template", "%(info.filename)s",
+                task.url
+            ]
+            
+            if task.mode == "audio":
+                cmd.extend(["-x", "--audio-format", "mp3"])
+            elif task.mode == "live":
+                cmd.extend(["--live-from-start"])
+            
+            # Add progress hook
+            progress_cmd = cmd + ["--progress-hook", "echo"]
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            # Monitor progress
+            while process.returncode is None:
+                await asyncio.sleep(1)
+                
+                # Update progress if callback provided
+                if task.progress_callback:
+                    task.progress_callback({
+                        "percent": 50,  # Simplified - real impl would parse output
+                        "speed": "N/A",
+                        "eta": "N/A"
+                    })
+                
+                # Check if cancelled
+                if task.task_id in self._tasks:
+                    if self._tasks[task.task_id].status == DownloadStatus.CANCELLED:
+                        process.terminate()
+                        task.status = DownloadStatus.CANCELLED
+                        self._results[task.task_id].set_result(None)
+                        return
+                else:
+                    break
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                # Find the downloaded file
+                files = list(config.DOWNLOADS_DIR.glob(f"dl_{timestamp}_*"))
+                if files:
+                    task.file_path = str(files[0])
+                    task.status = DownloadStatus.COMPLETED
+                    self._results[task.task_id].set_result(task.file_path)
+                else:
+                    task.status = DownloadStatus.FAILED
+                    task.error = "File not found after download"
+                    self._results[task.task_id].set_result(None)
+            else:
+                task.status = DownloadStatus.FAILED
+                task.error = stderr.decode() if stderr else "Unknown error"
+                self._results[task.task_id].set_result(None)
+                
+        except Exception as e:
+            logger.error(f"Download error: {e}")
+            task.status = DownloadStatus.FAILED
+            task.error = str(e)
+            if task.task_id in self._results:
+                self._results[task.task_id].set_result(None)
+    
+    async def wait_for_download(self, task_id: str) -> Optional[str]:
+        """Wait for download to complete and return file path."""
+        if task_id not in self._results:
+            return None
+        
+        try:
+            result = await asyncio.wait_for(self._results[task_id], timeout=600)
+            return result
+        except asyncio.TimeoutError:
+            logger.error(f"Download timeout for task {task_id}")
+            if task_id in self._tasks:
+                self._tasks[task_id].status = DownloadStatus.FAILED
+            return None
+        finally:
+            # Cleanup
+            if task_id in self._tasks:
+                del self._tasks[task_id]
+            if task_id in self._results:
+                del self._results[task_id]
+    
+    def cancel_user_downloads(self, user_id: int) -> bool:
+        """Cancel all active downloads for a user."""
+        if user_id not in self._user_tasks:
+            return False
+        
+        cancelled = False
+        for task_id in self._user_tasks[user_id]:
+            if task_id in self._tasks:
+                task = self._tasks[task_id]
+                if task.status in [DownloadStatus.PENDING, DownloadStatus.DOWNLOADING]:
+                    task.status = DownloadStatus.CANCELLED
+                    cancelled = True
+        
+        self._user_tasks[user_id] = []
+        return cancelled
+    
+    def get_task_status(self, task_id: str) -> Optional[DownloadTask]:
+        """Get status of a download task."""
+        return self._tasks.get(task_id)
+    
+    def get_user_active_downloads(self, user_id: int) -> list:
+        """Get all active downloads for a user."""
+        if user_id not in self._user_tasks:
+            return []
+        
+        active = []
+        for task_id in self._user_tasks[user_id]:
+            if task_id in self._tasks:
+                task = self._tasks[task_id]
+                if task.status in [DownloadStatus.PENDING, DownloadStatus.DOWNLOADING]:
+                    active.append(task)
+        
+        return active
