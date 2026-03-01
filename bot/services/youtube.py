@@ -53,10 +53,36 @@ class YouTubeService:
                 if not line.strip():
                     continue
                 data = json.loads(line)
+                # Get thumbnail - prefer default or medium quality
+                thumbnails = data.get("thumbnails", [])
+                thumbnail_url = None
+                if thumbnails:
+                    # Try to get medium quality first
+                    for thumb in thumbnails:
+                        if thumb.get("url"):
+                            thumbnail_url = thumb["url"]
+                            # Prefer medium or high quality
+                            if thumb.get("height", 0) >= 180:
+                                break
+                
+                # Format upload date
+                upload_date = data.get("upload_date", "")
+                if upload_date:
+                    try:
+                        # Format from YYYYMMDD to relative or short format
+                        upload_date = f"{upload_date[6:8]}/{upload_date[4:6]}/{upload_date[0:4]}"
+                    except:
+                        upload_date = ""
+                
                 results.append({
                     "id": data.get("id"),
                     "title": data.get("title"),
-                    "url": f"https://www.youtube.com/watch?v={data.get('id')}"
+                    "url": f"https://www.youtube.com/watch?v={data.get('id')}",
+                    "thumbnail": thumbnail_url or data.get("thumbnail"),
+                    "view_count": data.get("view_count", 0),
+                    "duration": data.get("duration", 0),
+                    "uploader": data.get("uploader", "Unknown"),
+                    "upload_date": upload_date
                 })
         except Exception as e:
             logger.error(f"Search error: {e}")

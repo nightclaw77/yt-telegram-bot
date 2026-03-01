@@ -28,8 +28,11 @@ logger = logging.getLogger(__name__)
 
 # --- Authorization Middleware ---
 
-async def authorize_user(event, handler):
-    """Check if user is authorized to use the bot."""
+async def authorize_user(handler, event, data):
+    """
+    Check if user is authorized to use the bot.
+    aiogram 3.x middleware signature: (handler, event, data)
+    """
     user_id = None
     
     if isinstance(event, Message):
@@ -40,7 +43,7 @@ async def authorize_user(event, handler):
         user_id = event.from_user.id
     
     if user_id is None:
-        return
+        return await handler(event, data)
     
     if user_id not in config.ALLOWED_USER_IDS:
         if isinstance(event, Message):
@@ -51,7 +54,7 @@ async def authorize_user(event, handler):
             await event.answer(results=[], switch_pm_text="Unauthorized. Click to join.", switch_pm_parameter="auth")
         return
     
-    return await handler(event)
+    return await handler(event, data)
 
 
 # --- Bot Setup ---
@@ -71,11 +74,12 @@ async def main():
     # Create dispatcher
     dp = Dispatcher()
     
-    # Include routers
-    dp.message.middleware(authorize_user)
-    dp.callback_query.middleware(authorize_user)
-    dp.inline_query.middleware(authorize_user)
+    # Register middleware
+    dp.message.outer_middleware(authorize_user)
+    dp.callback_query.outer_middleware(authorize_user)
+    dp.inline_query.outer_middleware(authorize_user)
     
+    # Include routers
     dp.include_router(commands.router)
     dp.include_router(messages.router)
     dp.include_router(callbacks.router)
