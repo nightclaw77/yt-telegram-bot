@@ -16,6 +16,57 @@ download_manager = DownloadManager.get_instance()
 summarizer = SummarizerService()
 
 
+async def show_quality_options(user_id: int, url: str, mode: str, bot: Bot):
+    """Show quality selection options for download."""
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    
+    if mode == "audio":
+        # Audio options
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🎵 MP3 (128k)", callback_data=f"dl_audio|{url}|bestaudio"),
+                InlineKeyboardButton(text="🎵 MP3 (320k)", callback_data=f"dl_audio|{url}|bestaudio+")
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back", callback_data=f"select_format|{url}|video")
+            ]
+        ])
+        await bot.send_message(
+            chat_id=user_id,
+            text="🎧 <b>Audio Quality</b>\n\nSelect audio quality:",
+            reply_markup=keyboard
+        )
+    else:
+        # Video quality options
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🖥️ 4K (2160p)", callback_data=f"dl_video|{url}|bestvideo[height<=2160]"),
+                InlineKeyboardButton(text="🖥️ 1080p", callback_data=f"dl_video|url|bestvideo[height<=1080]+bestaudio/best")
+            ],
+            [
+                InlineKeyboardButton(text="🖥️ 720p", callback_data=f"dl_video|{url}|bestvideo[height<=720]+bestaudio/best"),
+                InlineKeyboardButton(text="🖥️ 480p", callback_data=f"dl_video|{url}|bestvideo[height<=480]+bestaudio/best")
+            ],
+            [
+                InlineKeyboardButton(text="⚡ Best Available", callback_data=f"dl_video|{url}|best"),
+            ],
+            [
+                InlineKeyboardButton(text="🎵 Audio Only (MP3)", callback_data=f"select_format|{url}|audio")
+            ]
+        ])
+        
+        # Get video info for title
+        info = await youtube_service.get_video_info(url)
+        title = info.get("title", "Video") if info else "Video"
+        
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"🎬 <b>{title[:50]}...</b>\n\n"
+                 f"📥 <b>Select Quality:</b>",
+            reply_markup=keyboard
+        )
+
+
 @router.callback_query()
 async def handle_callback(callback: CallbackQuery, bot: Bot):
     """Handle callback queries from inline buttons."""
@@ -42,6 +93,13 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
         else:
             from bot.handlers.messages import show_video_options
             await show_video_options(callback.message, url, bot)
+        await callback.answer()
+        return
+
+    if action == "select_format":
+        # Show quality selection menu
+        mode = parts[2] if len(parts) > 2 else "video"
+        await show_quality_options(callback.from_user.id, url, mode, bot)
         await callback.answer()
         return
 
