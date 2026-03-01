@@ -184,16 +184,16 @@ def create_inline_result_from_search(video: dict) -> InlineQueryResultArticle:
     uploader = video.get('uploader', 'Unknown')
     upload_date = video.get('upload_date', '')
     
-    # Build description
+    # Build description - order: upload date, views, duration, uploader
     desc_parts = []
-    if uploader and uploader != 'Unknown':
-        desc_parts.append(f"👤 {uploader}")
+    if upload_date:
+        desc_parts.append(f"🕒 {upload_date}")
     if views:
         desc_parts.append(f"👁️ {format_view_count(views)}")
     if duration:
         desc_parts.append(f"⏱️ {format_duration(duration)}")
-    if upload_date:
-        desc_parts.append(f"📅 {upload_date}")
+    if uploader and uploader != 'Unknown':
+        desc_parts.append(f"📺 {uploader}")
     
     description = " | ".join(desc_parts) if desc_parts else "YouTube Video"
     

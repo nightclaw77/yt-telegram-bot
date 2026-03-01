@@ -3,8 +3,51 @@ import asyncio
 import json
 import logging
 from typing import Optional, List, Dict
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
+
+
+def get_relative_time(upload_date_str: str) -> str:
+    """Convert YYYYMMDD to relative time like '2 hours ago', '3 days ago'."""
+    if not upload_date_str or len(upload_date_str) != 8:
+        return ""
+    
+    try:
+        # Parse date from YYYYMMDD format
+        upload_date = datetime.strptime(upload_date_str, "%Y%m%d")
+        now = datetime.now()
+        delta = now - upload_date
+        
+        if delta < timedelta(hours=1):
+            minutes = int(delta.total_seconds() / 60)
+            if minutes <= 1:
+                return "just now"
+            return f"{minutes} minutes ago"
+        elif delta < timedelta(days=1):
+            hours = int(delta.total_seconds() / 3600)
+            if hours == 1:
+                return "1 hour ago"
+            return f"{hours} hours ago"
+        elif delta < timedelta(days=30):
+            days = delta.days
+            if days == 1:
+                return "yesterday"
+            return f"{days} days ago"
+        elif delta < timedelta(days=365):
+            months = delta.days // 30
+            if months == 1:
+                return "1 month ago"
+            return f"{months} months ago"
+        else:
+            years = delta.days // 365
+            if years == 1:
+                return "1 year ago"
+            return f"{years} years ago"
+    except:
+        return ""
+    
+    return ""
 
 
 class YouTubeService:
@@ -65,14 +108,9 @@ class YouTubeService:
                             if thumb.get("height", 0) >= 180:
                                 break
                 
-                # Format upload date
-                upload_date = data.get("upload_date", "")
-                if upload_date:
-                    try:
-                        # Format from YYYYMMDD to relative or short format
-                        upload_date = f"{upload_date[6:8]}/{upload_date[4:6]}/{upload_date[0:4]}"
-                    except:
-                        upload_date = ""
+                # Format upload date to relative time
+                upload_date_str = data.get("upload_date", "")
+                upload_date = get_relative_time(upload_date_str)
                 
                 results.append({
                     "id": data.get("id"),
@@ -82,6 +120,7 @@ class YouTubeService:
                     "view_count": data.get("view_count", 0),
                     "duration": data.get("duration", 0),
                     "uploader": data.get("uploader", "Unknown"),
+                    "channel_id": data.get("channel_id", ""),
                     "upload_date": upload_date
                 })
         except Exception as e:
