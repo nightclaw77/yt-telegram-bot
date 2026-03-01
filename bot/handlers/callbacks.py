@@ -22,23 +22,93 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
     parts = callback.data.split("|")
     action, url = parts[0], parts[1]
     
+    # For inline mode callbacks, we need to answer with a message
+    # instead of editing the original message (which might not exist in inline context)
+    is_inline = callback.message is None or callback.inline_message_id is not None
+    
     if action == "info":
         from bot.handlers.messages import show_video_options
-        await show_video_options(callback.message, url, bot)
+        if is_inline:
+            # For inline callbacks, we need to send a new message to the user
+            await bot.send_message(
+                chat_id=callback.from_user.id,
+                text="⏳ Loading video options..."
+            )
+            # Actually get the info and show options
+            info = await youtube_service.get_video_info(url)
+            if info:
+                from bot.handlers.messages import show_video_options
+                await show_video_options_by_id(callback.from_user.id, url, bot)
+        else:
+            from bot.handlers.messages import show_video_options
+            await show_video_options(callback.message, url, bot)
         await callback.answer()
         return
 
     if action == "dl_video":
         format_id = parts[2] if len(parts) > 2 else "best"
-        await handle_video_download(callback, url, format_id, bot)
+        # Send to user's DM instead of trying to reply to inline message
+        await bot.send_message(
+            chat_id=callback.from_user.id,
+            text="⏳ Starting download..."
+        )
+        await handle_video_download_inline(callback, url, format_id, bot)
     elif action == "dl_audio":
-        await handle_audio_download(callback, url, bot)
+        await bot.send_message(
+            chat_id=callback.from_user.id,
+            text="⏳ Extracting audio..."
+        )
+        await handle_audio_download_inline(callback, url, bot)
     elif action == "summary":
-        await handle_summary(callback, url, bot)
+        await bot.send_message(
+            chat_id=callback.from_user.id,
+            text="⏳ Generating AI summary..."
+        )
+        await handle_summary_inline(callback, url, bot)
     elif action == "capture":
-        await handle_live_capture(callback, url, bot)
+        await bot.send_message(
+            chat_id=callback.from_user.id,
+            text="⏳ Starting live capture..."
+        )
+        await handle_live_capture_inline(callback, url, bot)
 
     await callback.answer()
+
+
+async def show_video_options_by_id(user_id: int, url: str, bot: Bot):
+    """Show video options by sending to user's DM."""
+    info = await youtube_service.get_video_info(url)
+    if not info:
+        await bot.send_message(chat_id=user_id, text="❌ Could not fetch video info.")
+        return
+    
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    
+    keyboard = [
+        [
+            InlineKeyboardButton(text="🎬 Video (best)", callback_data=f"dl_video|{url}|best"),
+            InlineKeyboardButton(text="🎬 Video (720p)", callback_data=f"dl_video|{url}|22")
+        ],
+        [
+            InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"dl_audio|{url}|bestaudio"),
+            InlineKeyboardButton(text="📝 AI Summary", callback_data=f"summary|{url}|xl")
+        ]
+    ]
+    
+    if info.get("is_live"):
+        keyboard.append([InlineKeyboardButton(text="⏺️ Capture Live Stream", callback_data=f"capture|{url}")])
+
+    duration = info.get("duration", 0)
+    duration_str = f"{duration//60}:{duration%60:02d}" if duration else "N/A"
+    
+    await bot.send_message(
+        chat_id=user_id,
+        text=f"🎬 <b>{info['title']}</b>\n"
+             f"👤 {info['uploader']}\n"
+             f"⏱️ {duration_str}\n\n"
+             f"Choose an action:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+    )
 
 
 async def handle_video_download(callback: CallbackQuery, url: str, format_id: str, bot: Bot):
@@ -234,3 +304,190 @@ async def upload_with_retry(bot: Bot, message, media_type: str, path: str, max_r
                 return False
     
     return False
+
+
+# --- Inline mode handlers (send to user's DM) ---
+
+async def handle_video_download_inline(callback: CallbackQuery, url: str, format_id: str, bot: Bot):
+    """Handle video download for inline mode - sends to user's DM."""
+    user_id = callback.from_user.id
+    status_msg = await bot.send_message(user_id, "⏳ Downloading video...")
+    
+    async def progress_callback(progress: dict):
+        percent = progress.get("percent", 0)
+        speed = progress.get("speed", "N/A")
+        eta = progress.get("eta", "N/A")
+        try:
+            await bot.edit_message_text(
+                chat_id=user_id,
+                message_id=status_msg.message_id,
+                text=f"📥 Downloading... {percent:.1f}%\nSpeed: {speed}\nETA: {eta}"
+            )
+        except Exception:
+            pass
+    
+    task_id = download_manager.add_download(
+        user_id=user_id,
+        url=url,
+        format_id=format_id,
+        mode="video",
+        progress_callback=progress_callback
+    )
+    
+    path = await download_manager.wait_for_download(task_id)
+    chat_id = user_id
+    
+    if path:
+        success = await upload_with_retry(bot, status_msg, "video", path)
+        
+        if success:
+            from bot.database.models import Database
+            db = Database()
+            await db.init()
+            info = await youtube_service.get_video_info(url)
+            await db.add_download(
+                user_id=user_id,
+                url=url,
+                title=info.get("title", "Unknown") if info else "Video",
+                status="completed",
+                file_path=path
+            )
+        else:
+            await bot.send_message(user_id, "❌ Upload failed. File retained for retry.")
+            return
+    else:
+        await bot.send_message(user_id, "❌ Download failed.")
+        
+        from bot.database.models import Database
+        db = Database()
+        await db.init()
+        info = await youtube_service.get_video_info(url)
+        await db.add_download(
+            user_id=user_id,
+            url=url,
+            title=info.get("title", "Unknown") if info else "Video",
+            status="failed",
+            file_path=None
+        )
+    
+    try:
+        await status_msg.delete()
+    except:
+        pass
+
+
+async def handle_audio_download_inline(callback: CallbackQuery, url: str, bot: Bot):
+    """Handle audio download for inline mode."""
+    user_id = callback.from_user.id
+    status_msg = await bot.send_message(user_id, "⏳ Downloading audio...")
+    
+    async def progress_callback(progress: dict):
+        percent = progress.get("percent", 0)
+        try:
+            await bot.edit_message_text(
+                chat_id=user_id,
+                message_id=status_msg.message_id,
+                text=f"🎵 Downloading audio... {percent:.1f}%"
+            )
+        except Exception:
+            pass
+    
+    task_id = download_manager.add_download(
+        user_id=user_id,
+        url=url,
+        format_id="bestaudio",
+        mode="audio",
+        progress_callback=progress_callback
+    )
+    
+    path = await download_manager.wait_for_download(task_id)
+    
+    if path:
+        success = await upload_with_retry(bot, status_msg, "audio", path)
+        
+        if success:
+            from bot.database.models import Database
+            db = Database()
+            await db.init()
+            info = await youtube_service.get_video_info(url)
+            await db.add_download(
+                user_id=user_id,
+                url=url,
+                title=info.get("title", "Unknown") if info else "Audio",
+                status="completed",
+                file_path=path
+            )
+        else:
+            await bot.send_message(user_id, "❌ Upload failed. File retained.")
+            return
+    else:
+        await bot.send_message(user_id, "❌ Audio extraction failed.")
+    
+    try:
+        await status_msg.delete()
+    except:
+        pass
+
+
+async def handle_summary_inline(callback: CallbackQuery, url: str, bot: Bot):
+    """Handle AI summary for inline mode."""
+    user_id = callback.from_user.id
+    status_msg = await bot.send_message(user_id, "⏳ Generating AI summary (this may take a while)...")
+    
+    try:
+        summary = await summarizer.summarize(url)
+        
+        if summary:
+            # Delete status message first
+            try:
+                await status_msg.delete()
+            except:
+                pass
+            
+            # Send summary in chunks
+            for i in range(0, len(summary), 4000):
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=f"📝 <b>Summary:</b>\n\n{summary[i:i+4000]}",
+                    parse_mode="HTML"
+                )
+        else:
+            await bot.send_message(user_id, "❌ Could not generate summary.")
+    except Exception as e:
+        await bot.send_message(user_id, f"❌ Error: {e}")
+    
+    try:
+        await status_msg.delete()
+    except:
+        pass
+
+
+async def handle_live_capture_inline(callback: CallbackQuery, url: str, bot: Bot):
+    """Handle live stream capture for inline mode."""
+    user_id = callback.from_user.id
+    status_msg = await bot.send_message(user_id, "⏳ Starting live stream capture...")
+    
+    task_id = download_manager.add_download(
+        user_id=user_id,
+        url=url,
+        format_id="best",
+        mode="live",
+        progress_callback=None
+    )
+    
+    path = await download_manager.wait_for_download(task_id)
+    
+    if path:
+        success = await upload_with_retry(bot, status_msg, "video", path)
+        if success:
+            await bot.send_message(user_id, "✅ Live stream captured and uploaded!")
+        else:
+            await bot.send_message(user_id, "❌ Upload failed. File retained.")
+            return
+    else:
+        await bot.send_message(user_id, "❌ Live capture failed.")
+    
+    try:
+        await status_msg.delete()
+    except:
+        pass

@@ -14,16 +14,26 @@ logger = logging.getLogger(__name__)
 router = Router()
 youtube_service = YouTubeService()
 
-def format_view_count(views: int) -> str:
+def format_view_count(views) -> str:
     """Format view count to human readable."""
+    try:
+        views = int(views)
+    except (TypeError, ValueError):
+        return "0"
+    
     if views >= 1_000_000:
         return f"{views / 1_000_000:.1f}M"
     elif views >= 1_000:
         return f"{views / 1_000:.1f}K"
     return str(views)
 
-def format_duration(seconds: int) -> str:
+def format_duration(seconds) -> str:
     """Format duration to mm:ss or hh:mm:ss."""
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        return "0:00"
+    
     if seconds >= 3600:
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
@@ -152,8 +162,8 @@ def create_inline_result(video_info: dict) -> InlineQueryResultArticle:
         thumbnail_url=thumbnail,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎬 Download", url=f"https://t.me/Night77_tube_bot?start=dl_{video_info['id']}"),
-                InlineKeyboardButton(text="📝 AI Summary", url=f"https://t.me/Night77_tube_bot?start=sum_{video_info['id']}")
+                InlineKeyboardButton(text="🎬 Download", callback_data=f"dl_video|{video_url}|best"),
+                InlineKeyboardButton(text="📝 AI Summary", callback_data=f"summary|{video_url}|xl")
             ]
         ])
     )
@@ -200,8 +210,8 @@ def create_inline_result_from_search(video: dict) -> InlineQueryResultArticle:
         thumbnail_url=thumbnail,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎬 Download", url=f"https://t.me/Night77_tube_bot?start=dl_{video_id}"),
-                InlineKeyboardButton(text="📝 AI Summary", url=f"https://t.me/Night77_tube_bot?start=sum_{video_id}")
+                InlineKeyboardButton(text="🎬 Download", callback_data=f"dl_video|{video_url}|best"),
+                InlineKeyboardButton(text="📝 AI Summary", callback_data=f"summary|{video_url}|xl")
             ]
         ])
     )
