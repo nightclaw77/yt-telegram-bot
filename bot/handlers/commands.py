@@ -134,3 +134,95 @@ async def cmd_cancel(message: Message, bot: Bot):
         await message.answer("✅ Your download has been cancelled.")
     else:
         await message.answer("ℹ️ No active downloads to cancel.")
+
+
+@router.message(Command("downloads"))
+async def cmd_downloads(message: Message, bot: Bot):
+    """Handle /downloads command to show list of downloaded files."""
+    import os
+    from pathlib import Path
+    from datetime import datetime
+    
+    downloads_dir = config.DOWNLOADS_DIR
+    
+    if not downloads_dir.exists():
+        await message.answer("📂 No downloads folder found.")
+        return
+    
+    # Get all files
+    files = []
+    for f in downloads_dir.iterdir():
+        if f.is_file():
+            stat = f.stat()
+            size_mb = stat.st_size / (1024 * 1024)
+            modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+            files.append({
+                "name": f.name,
+                "size": f"{size_mb:.1f} MB",
+                "date": modified,
+                "path": str(f)
+            })
+    
+    if not files:
+        await message.answer("📂 No downloaded files found.")
+        return
+    
+    # Sort by date (newest first)
+    files.sort(key=lambda x: x["date"], reverse=True)
+    
+    # Show files with options to delete
+    text = f"📂 <b>Downloaded Files</b> ({len(files)} files)\n\n"
+    
+    for i, f in enumerate(files[:10], 1):
+        text += f"{i}. <code>{f['name'][:40]}...</code>\n"
+        text += f"   📏 {f['size']} | 📅 {f['date']}\n\n"
+    
+    # Add total size
+    total_size = sum(f["size_mb"] for f in [{"size_mb": float(f["size"].replace(" MB", ""))} for f in files])
+    text += f"💾 <b>Total: {total_size:.1f} MB</b>\n\n"
+    text += "Use /cleanup to delete all files."
+    
+    await message.answer(text)
+
+
+@router.message(Command("cleanup"))
+async def cmd_cleanup(message: Message):
+    """Handle /cleanup command to delete old downloaded files."""
+    import os
+    from pathlib import Path
+    from datetime import datetime, timedelta
+    
+    downloads_dir = config.DOWNLOADS_DIR
+    
+    if not downloads_dir.exists():
+        await message.answer("📂 No downloads folder found.")
+        return
+    
+    # Delete files older than 24 hours
+    cutoff = datetime.now() - timedelta(hours=24)
+    deleted_count = 0
+    deleted_size = 0
+    
+    for f in downloads_dir.iterdir():
+        if f.is_file():
+            stat = f.stat()
+            modified = datetime.fromtimestamp(stat.st_mtime)
+            
+            if modified < cutoff:
+                size_mb = stat.st_size / (1024 * 1024)
+                try:
+                    f.unlink()
+                    deleted_count += 1
+                    deleted_size += size_mb
+                except Exception as e:
+                    logger.warning(f"Could not delete {f.name}: {e}")
+    
+    if deleted_count > 0:
+        await message.answer(
+            f"✅ <b>Cleanup Complete!</b>\n\n"
+            f"🗑️ Deleted: {deleted_count} files\n"
+            f"💾 Freed: {deleted_size:.1f} MB\n\n"
+            f"Files older than 24 hours were removed."
+        )
+    else:
+        await message.answer("✅ No old files to clean up.")

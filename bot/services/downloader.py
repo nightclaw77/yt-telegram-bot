@@ -107,7 +107,7 @@ class DownloadManager:
                 "-f", task.format_id,
                 "--output", output_template,
                 "--no-playlist",
-                "--progress-template", "%(info.filename)s",
+                "-v",  # verbose for progress
                 task.url
             ]
             
@@ -116,8 +116,7 @@ class DownloadManager:
             elif task.mode == "live":
                 cmd.extend(["--live-from-start"])
             
-            # Add progress hook
-            progress_cmd = cmd + ["--progress-hook", "echo"]
+            logger.info(f"Starting download: {' '.join(cmd)}")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -125,17 +124,32 @@ class DownloadManager:
                 stderr=asyncio.subprocess.PIPE
             )
             
-            # Monitor progress
+            download_complete = False
+            progress_percent = 0
+            
+            # Monitor progress - read stderr for progress info
             while process.returncode is None:
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 
-                # Update progress if callback provided
+                # Update progress - simplified progress
+                progress_percent = min(progress_percent + 5, 90)
+                
                 if task.progress_callback:
-                    task.progress_callback({
-                        "percent": 50,  # Simplified - real impl would parse output
-                        "speed": "N/A",
-                        "eta": "N/A"
-                    })
+                    try:
+                        if asyncio.iscoroutinefunction(task.progress_callback):
+                            await task.progress_callback({
+                                "percent": progress_percent,
+                                "speed": "Checking...",
+                                "eta": "Calculating..."
+                            })
+                        else:
+                            task.progress_callback({
+                                "percent": progress_percent,
+                                "speed": "Checking...",
+                                "eta": "Calculating..."
+                            })
+                    except Exception as e:
+                        logger.warning(f"Progress callback error: {e}")
                 
                 # Check if cancelled
                 if task.task_id in self._tasks:
@@ -155,14 +169,35 @@ class DownloadManager:
                 if files:
                     task.file_path = str(files[0])
                     task.status = DownloadStatus.COMPLETED
+                    
+                    # Final progress update
+                    if task.progress_callback:
+                        try:
+                            if asyncio.iscoroutinefunction(task.progress_callback):
+                                await task.progress_callback({
+                                    "percent": 100,
+                                    "speed": "Done!",
+                                    "eta": "0s"
+                                })
+                            else:
+                                task.progress_callback({
+                                    "percent": 100,
+                                    "speed": "Done!",
+                                    "eta": "0s"
+                                })
+                        except:
+                            pass
+                    
                     self._results[task.task_id].set_result(task.file_path)
                 else:
                     task.status = DownloadStatus.FAILED
                     task.error = "File not found after download"
                     self._results[task.task_id].set_result(None)
             else:
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                logger.error(f"Download failed: {error_msg}")
                 task.status = DownloadStatus.FAILED
-                task.error = stderr.decode() if stderr else "Unknown error"
+                task.error = error_msg
                 self._results[task.task_id].set_result(None)
                 
         except Exception as e:

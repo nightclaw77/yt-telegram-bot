@@ -65,6 +65,31 @@ async def main():
     config.load()
     config.validate()
     
+    # Cleanup old downloads on startup
+    import os
+    from pathlib import Path
+    from datetime import datetime, timedelta
+    
+    try:
+        downloads_dir = config.DOWNLOADS_DIR
+        if downloads_dir.exists():
+            cutoff = datetime.now() - timedelta(hours=24)
+            deleted_count = 0
+            for f in downloads_dir.iterdir():
+                if f.is_file():
+                    stat = f.stat()
+                    modified = datetime.fromtimestamp(stat.st_mtime)
+                    if modified < cutoff:
+                        try:
+                            f.unlink()
+                            deleted_count += 1
+                        except:
+                            pass
+            if deleted_count > 0:
+                print(f"🗑️ Cleaned up {deleted_count} old download files on startup")
+    except Exception as e:
+        print(f"Startup cleanup warning: {e}")
+    
     # Initialize bot
     bot = Bot(
         token=config.TELEGRAM_BOT_TOKEN,

@@ -369,20 +369,53 @@ async def upload_with_retry(bot: Bot, message, media_type: str, path: str, max_r
 async def handle_video_download_inline(callback: CallbackQuery, url: str, format_id: str, bot: Bot):
     """Handle video download for inline mode - sends to user's DM."""
     user_id = callback.from_user.id
-    status_msg = await bot.send_message(user_id, "⏳ Downloading video...")
     
+    # Get video info for title
+    info = await youtube_service.get_video_info(url)
+    title = info.get("title", "Video")[:40] + "..." if info else "Video"
+    
+    # Send initial status message
+    status_msg = await bot.send_message(
+        user_id, 
+        f"🎬 <b>{title}</b>\n\n"
+        f"📥 Status: <b>Starting download...</b>\n"
+        f"⏳ Please wait..."
+    )
+    
+    # Create progress callback
     async def progress_callback(progress: dict):
         percent = progress.get("percent", 0)
         speed = progress.get("speed", "N/A")
         eta = progress.get("eta", "N/A")
+        
+        # Create progress bar
+        bar_length = 15
+        filled = int(bar_length * percent / 100)
+        bar = "█" * filled + "░" * (bar_length - filled)
+        
         try:
             await bot.edit_message_text(
                 chat_id=user_id,
                 message_id=status_msg.message_id,
-                text=f"📥 Downloading... {percent:.1f}%\nSpeed: {speed}\nETA: {eta}"
+                text=f"🎬 <b>{title}</b>\n\n"
+                     f"📥 Status: <b>Downloading...</b>\n"
+                     f" Progress: [{bar}] {percent:.0f}%\n"
+                     f" Speed: {speed} | ETA: {eta}"
             )
         except Exception:
             pass
+    
+    # Send "processing" message
+    try:
+        await bot.edit_message_text(
+            chat_id=user_id,
+            message_id=status_msg.message_id,
+            text=f"🎬 <b>{title}</b>\n\n"
+                 f"📥 Status: <b>Processing...</b>\n"
+                 f"⏳ Connecting to YouTube..."
+        )
+    except:
+        pass
     
     task_id = download_manager.add_download(
         user_id=user_id,
@@ -396,13 +429,24 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
     chat_id = user_id
     
     if path:
+        # Update to uploading status
+        try:
+            await bot.edit_message_text(
+                chat_id=user_id,
+                message_id=status_msg.message_id,
+                text=f"🎬 <b>{title}</b>\n\n"
+                     f"📤 Status: <b>Uploading to Telegram...</b>\n"
+                     f"⏳ Please wait, this may take time for large files..."
+            )
+        except:
+            pass
+        
         success = await upload_with_retry(bot, status_msg, "video", path)
         
         if success:
             from bot.database.models import Database
             db = Database()
             await db.init()
-            info = await youtube_service.get_video_info(url)
             await db.add_download(
                 user_id=user_id,
                 url=url,
@@ -414,12 +458,16 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
             await bot.send_message(user_id, "❌ Upload failed. File retained for retry.")
             return
     else:
-        await bot.send_message(user_id, "❌ Download failed.")
+        await bot.send_message(
+            user_id, 
+            f"❌ <b>Download Failed!</b>\n\n"
+            f"Video: {title}\n"
+            f"⚠️ The video might be unavailable or age-restricted."
+        )
         
         from bot.database.models import Database
         db = Database()
         await db.init()
-        info = await youtube_service.get_video_info(url)
         await db.add_download(
             user_id=user_id,
             url=url,
