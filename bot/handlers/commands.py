@@ -16,8 +16,28 @@ rate_limiter = RateLimiter(config.RATE_LIMIT_PER_MINUTE)
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message):
-    """Handle /start command."""
+async def cmd_start(message: Message, command: CommandObject):
+    """Handle /start command and deep links."""
+    # Check for deep links (start parameters)
+    if command.args:
+        payload = command.args
+        if payload.startswith("dl_"):
+            video_id = payload[3:]
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            from bot.handlers.messages import show_video_options
+            await show_video_options(message, url)
+            return
+        elif payload.startswith("sum_"):
+            video_id = payload[4:]
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            from bot.handlers.callbacks import handle_summary_request
+            # We simulate a callback for the summary
+            await message.answer(f"⏳ Processing AI summary for video ID: {video_id}")
+            # Instead of callback, we call the service directly if possible or show options
+            from bot.handlers.messages import show_video_options
+            await show_video_options(message, url)
+            return
+
     await message.answer(
         "🎬 <b>Night YouTube Bot</b>\n\n"
         "• Send a <b>Video URL</b> to download or summarize.\n"
@@ -25,7 +45,8 @@ async def cmd_start(message: Message):
         "• Use <code>/search query</code> to find videos.\n"
         "• Use <code>/live url</code> to capture a live stream.\n"
         "• Use <code>/cancel</code> to cancel ongoing downloads.\n"
-        "• Use <code>/history</code> to see download history."
+        "• Use <code>/history</code> to see download history.\n\n"
+        "✨ <b>Inline Mode:</b> Type <code>@Night77_tube_bot query</code> in any chat to search!"
     )
 
 

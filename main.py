@@ -13,10 +13,10 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineQuery
 
 from bot.config import config
-from bot.handlers import commands, messages, callbacks
+from bot.handlers import commands, messages, callbacks, inline
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +36,8 @@ async def authorize_user(event, handler):
         user_id = event.from_user.id
     elif isinstance(event, CallbackQuery):
         user_id = event.from_user.id
+    elif isinstance(event, InlineQuery):
+        user_id = event.from_user.id
     
     if user_id is None:
         return
@@ -45,6 +47,8 @@ async def authorize_user(event, handler):
             await event.answer("⛔️ Sorry, you're not authorized to use this bot.")
         elif isinstance(event, CallbackQuery):
             await event.answer("⛔️ Unauthorized", show_alert=True)
+        elif isinstance(event, InlineQuery):
+            await event.answer(results=[], switch_pm_text="Unauthorized. Click to join.", switch_pm_parameter="auth")
         return
     
     return await handler(event)
@@ -70,10 +74,12 @@ async def main():
     # Include routers
     dp.message.middleware(authorize_user)
     dp.callback_query.middleware(authorize_user)
+    dp.inline_query.middleware(authorize_user)
     
     dp.include_router(commands.router)
     dp.include_router(messages.router)
     dp.include_router(callbacks.router)
+    dp.include_router(inline.router)
     
     # Delete webhook and start polling
     await bot.delete_webhook(drop_pending_updates=True)
