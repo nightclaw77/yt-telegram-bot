@@ -133,18 +133,18 @@ def create_inline_result(video_info: dict) -> InlineQueryResultArticle:
     upload_date = video_info.get('upload_date', '')
     thumbnail = video_info.get('thumbnail')
     
-    # Build description
+    # Build description - order: upload date (if available), views, duration, channel
     desc_parts = []
-    if uploader:
-        desc_parts.append(f"👤 {uploader}")
+    if upload_date:
+        desc_parts.append(f"🕒 {upload_date}")
     if views:
         desc_parts.append(f"👁️ {format_view_count(views)}")
     if duration:
         desc_parts.append(f"⏱️ {format_duration(duration)}")
-    if upload_date:
-        desc_parts.append(f"📅 {upload_date}")
+    if uploader and uploader != 'Unknown':
+        desc_parts.append(f"📺 {uploader}")
     
-    description = " | ".join(desc_parts)
+    description = " | ".join(desc_parts) if desc_parts else "YouTube Video"
     
     content = InputTextMessageContent(
         message_text=f"🎬 <b>{title}</b>\n\n"
@@ -184,10 +184,8 @@ def create_inline_result_from_search(video: dict) -> InlineQueryResultArticle:
     uploader = video.get('uploader', 'Unknown')
     upload_date = video.get('upload_date', '')
     
-    # Build description - order: upload date, views, duration, uploader
+    # Build description - what's available in search results: views, duration, channel
     desc_parts = []
-    if upload_date:
-        desc_parts.append(f"🕒 {upload_date}")
     if views:
         desc_parts.append(f"👁️ {format_view_count(views)}")
     if duration:

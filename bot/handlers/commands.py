@@ -8,6 +8,7 @@ from aiogram.types import Message
 from bot.config import config
 from bot.services.youtube import YouTubeService
 from bot.utils.rate_limiter import RateLimiter
+from bot.utils.url_shortener import shorten_callback
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -96,7 +97,7 @@ async def cmd_search(message: Message, command: CommandObject, bot: Bot):
     keyboard = []
     for i, res in enumerate(results, 1):
         text += f"{i}. {res['title']}\n"
-        keyboard.append([InlineKeyboardButton(text=f"🎥 Select #{i}", callback_data=f"info|{res['url']}")])
+        keyboard.append([InlineKeyboardButton(text=f"🎥 Select #{i}", callback_data=shorten_callback("info", res['url']))])
     
     await msg.delete()
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), disable_web_page_preview=True)

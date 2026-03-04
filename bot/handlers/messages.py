@@ -10,6 +10,7 @@ from bot.services.youtube import YouTubeService
 from bot.services.compressor import CompressionService
 from bot.utils.rate_limiter import RateLimiter
 from bot.utils.validators import validate_youtube_url, is_channel_url
+from bot.utils.url_shortener import shorten_callback
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -133,18 +134,18 @@ async def handle_channel_url(message: Message, url: str, bot: Bot):
         response += "🔴 <b>LIVE NOW:</b>\n"
         for v in live:
             response += f"• {v['title']}\n"
-            keyboard.append([InlineKeyboardButton(text="🔴 Join/Capture Live", callback_data=f"info|{v['url']}")])
+            keyboard.append([InlineKeyboardButton(text="🔴 Join/Capture Live", callback_data=shorten_callback("info", v['url']))])
         response += "\n"
 
     response += "🆕 <b>Latest 3 Uploads:</b>\n"
     for i, v in enumerate(latest, 1):
         response += f"{i}. {v['title']}\n"
-        keyboard.append([InlineKeyboardButton(text=f"🆕 Latest #{i}", callback_data=f"info|{v['url']}")])
+        keyboard.append([InlineKeyboardButton(text=f"🆕 Latest #{i}", callback_data=shorten_callback("info", v['url']))])
     
     response += "\n🔥 <b>Top 3 Most Popular:</b>\n"
     for i, v in enumerate(top, 1):
         response += f"{i}. {v['title']}\n"
-        keyboard.append([InlineKeyboardButton(text=f"🔥 Top #{i}", callback_data=f"info|{v['url']}")])
+        keyboard.append([InlineKeyboardButton(text=f"🔥 Top #{i}", callback_data=shorten_callback("info", v['url']))])
 
     await msg.delete()
     await message.answer(response, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), disable_web_page_preview=True)
@@ -163,15 +164,15 @@ async def show_video_options(message: Message, url: str, bot: Bot):
     
     keyboard = [
         [
-            InlineKeyboardButton(text="🎬 Video (Best)", callback_data=f"dl_video|{url}|best"),
-            InlineKeyboardButton(text="🎬 720p", callback_data=f"dl_video|{url}|best[height<=720]")
+            InlineKeyboardButton(text="🎬 Video (Best)", callback_data=shorten_callback("dl_video", url, "best")),
+            InlineKeyboardButton(text="🎬 720p", callback_data=shorten_callback("dl_video", url, "720"))
         ],
-        [InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"dl_audio|{url}|best")],
-        [InlineKeyboardButton(text="📝 AI Summary", callback_data=f"summary|{url}|xl")]
+        [InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=shorten_callback("dl_audio", url, "best"))],
+        [InlineKeyboardButton(text="📝 AI Summary", callback_data=shorten_callback("summary", url, "xl"))]
     ]
     
     if info.get("is_live"):
-        keyboard.append([InlineKeyboardButton(text="⏺️ Capture Live Stream", callback_data=f"capture|{url}")])
+        keyboard.append([InlineKeyboardButton(text="⏺️ Capture Live Stream", callback_data=shorten_callback("capture", url))])
 
     await msg.delete()
     

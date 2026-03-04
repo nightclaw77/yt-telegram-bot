@@ -8,6 +8,7 @@ from bot.config import config
 from bot.services.youtube import YouTubeService
 from bot.services.downloader import DownloadManager
 from bot.services.summarizer import SummarizerService
+from bot.utils.url_shortener import reconstruct_url, shorten_callback
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -24,11 +25,11 @@ async def show_quality_options(user_id: int, url: str, mode: str, bot: Bot):
         # Audio options
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎵 MP3 (128k)", callback_data=f"dl_audio|{url}|bestaudio"),
-                InlineKeyboardButton(text="🎵 MP3 (320k)", callback_data=f"dl_audio|{url}|bestaudio+")
+                InlineKeyboardButton(text="🎵 MP3 (128k)", callback_data=shorten_callback("dl_audio", url, "bestaudio")),
+                InlineKeyboardButton(text="🎵 MP3 (320k)", callback_data=shorten_callback("dl_audio", url, "bestaudio+"))
             ],
             [
-                InlineKeyboardButton(text="🔙 Back", callback_data=f"select_format|{url}|video")
+                InlineKeyboardButton(text="🔙 Back", callback_data=shorten_callback("select_format", url, "video"))
             ]
         ])
         await bot.send_message(
@@ -40,18 +41,18 @@ async def show_quality_options(user_id: int, url: str, mode: str, bot: Bot):
         # Video quality options
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🖥️ 4K (2160p)", callback_data=f"dl_video|{url}|bestvideo[height<=2160]"),
-                InlineKeyboardButton(text="🖥️ 1080p", callback_data=f"dl_video|url|bestvideo[height<=1080]+bestaudio/best")
+                InlineKeyboardButton(text="🖥️ 4K (2160p)", callback_data=shorten_callback("dl_video", url, "2160")),
+                InlineKeyboardButton(text="🖥️ 1080p", callback_data=shorten_callback("dl_video", url, "1080"))
             ],
             [
-                InlineKeyboardButton(text="🖥️ 720p", callback_data=f"dl_video|{url}|bestvideo[height<=720]+bestaudio/best"),
-                InlineKeyboardButton(text="🖥️ 480p", callback_data=f"dl_video|{url}|bestvideo[height<=480]+bestaudio/best")
+                InlineKeyboardButton(text="🖥️ 720p", callback_data=shorten_callback("dl_video", url, "720")),
+                InlineKeyboardButton(text="🖥️ 480p", callback_data=shorten_callback("dl_video", url, "480"))
             ],
             [
-                InlineKeyboardButton(text="⚡ Best Available", callback_data=f"dl_video|{url}|best"),
+                InlineKeyboardButton(text="⚡ Best Available", callback_data=shorten_callback("dl_video", url, "best")),
             ],
             [
-                InlineKeyboardButton(text="🎵 Audio Only (MP3)", callback_data=f"select_format|{url}|audio")
+                InlineKeyboardButton(text="🎵 Audio Only (MP3)", callback_data=shorten_callback("select_format", url, "audio"))
             ]
         ])
         
@@ -71,7 +72,14 @@ async def show_quality_options(user_id: int, url: str, mode: str, bot: Bot):
 async def handle_callback(callback: CallbackQuery, bot: Bot):
     """Handle callback queries from inline buttons."""
     parts = callback.data.split("|")
-    action, url = parts[0], parts[1]
+    action = parts[0]
+    video_id_or_url = parts[1] if len(parts) > 1 else ""
+    
+    # Reconstruct full URL if it's a short video ID (11 chars)
+    if len(video_id_or_url) == 11 and video_id_or_url.replace("-", "").replace("_", "").isalnum():
+        url = reconstruct_url(video_id_or_url)
+    else:
+        url = video_id_or_url
     
     # For inline mode callbacks, we need to answer with a message
     # instead of editing the original message (which might not exist in inline context)
@@ -104,7 +112,18 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
         return
 
     if action == "dl_video":
-        format_id = parts[2] if len(parts) > 2 else "best"
+        quality = parts[2] if len(parts) > 2 else "best"
+        
+        # Map shorthand quality to yt-dlp format
+        format_map = {
+            "2160": "bestvideo[height<=2160]",
+            "1080": "bestvideo[height<=1080]+bestaudio/best",
+            "720": "bestvideo[height<=720]+bestaudio/best",
+            "480": "bestvideo[height<=480]+bestaudio/best",
+            "best": "best"
+        }
+        format_id = format_map.get(quality, "best")
+        
         # Send to user's DM instead of trying to reply to inline message
         await bot.send_message(
             chat_id=callback.from_user.id,
@@ -144,17 +163,17 @@ async def show_video_options_by_id(user_id: int, url: str, bot: Bot):
     
     keyboard = [
         [
-            InlineKeyboardButton(text="🎬 Video (best)", callback_data=f"dl_video|{url}|best"),
-            InlineKeyboardButton(text="🎬 Video (720p)", callback_data=f"dl_video|{url}|22")
+            InlineKeyboardButton(text="🎬 Video (best)", callback_data=shorten_callback("dl_video", url, "best")),
+            InlineKeyboardButton(text="🎬 Video (720p)", callback_data=shorten_callback("dl_video", url, "720"))
         ],
         [
-            InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"dl_audio|{url}|bestaudio"),
-            InlineKeyboardButton(text="📝 AI Summary", callback_data=f"summary|{url}|xl")
+            InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=shorten_callback("dl_audio", url, "bestaudio")),
+            InlineKeyboardButton(text="📝 AI Summary", callback_data=shorten_callback("summary", url, "xl"))
         ]
     ]
     
     if info.get("is_live"):
-        keyboard.append([InlineKeyboardButton(text="⏺️ Capture Live Stream", callback_data=f"capture|{url}")])
+        keyboard.append([InlineKeyboardButton(text="⏺️ Capture Live Stream", callback_data=shorten_callback("capture", url))])
 
     duration = info.get("duration", 0)
     duration_str = f"{duration//60}:{duration%60:02d}" if duration else "N/A"

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 def get_relative_time(upload_date_str: str) -> str:
     """Convert YYYYMMDD to relative time like '2 hours ago', '3 days ago'."""
     if not upload_date_str or len(upload_date_str) != 8:
-        return ""
+        return None
     
     try:
         # Parse date from YYYYMMDD format
@@ -23,7 +23,7 @@ def get_relative_time(upload_date_str: str) -> str:
             minutes = int(delta.total_seconds() / 60)
             if minutes <= 1:
                 return "just now"
-            return f"{minutes} minutes ago"
+            return f"{minutes} min ago"
         elif delta < timedelta(days=1):
             hours = int(delta.total_seconds() / 3600)
             if hours == 1:
@@ -45,9 +45,9 @@ def get_relative_time(upload_date_str: str) -> str:
                 return "1 year ago"
             return f"{years} years ago"
     except:
-        return ""
+        return None
     
-    return ""
+    return None
 
 
 class YouTubeService:
@@ -66,6 +66,10 @@ class YouTubeService:
             
             if process.returncode == 0:
                 data = json.loads(stdout.decode())
+                # Convert upload_date to relative time
+                upload_date_str = data.get("upload_date", "")
+                upload_date = get_relative_time(upload_date_str) if upload_date_str else None
+                
                 return {
                     "id": data.get("id"),
                     "title": data.get("title", "Unknown"),
@@ -74,6 +78,7 @@ class YouTubeService:
                     "is_live": data.get("is_live", False),
                     "thumbnail": data.get("thumbnail"),
                     "view_count": data.get("view_count", 0),
+                    "upload_date": upload_date,
                 }
         except Exception as e:
             logger.error(f"Error getting video info: {e}")
@@ -108,9 +113,32 @@ class YouTubeService:
                             if thumb.get("height", 0) >= 180:
                                 break
                 
-                # Format upload date to relative time
-                upload_date_str = data.get("upload_date", "")
-                upload_date = get_relative_time(upload_date_str)
+                # Format upload date to relative time - only available for individual video info
+                # Search results don't have upload_date, so we'll use timestamp if available
+                timestamp = data.get("timestamp")
+                upload_date = None
+                if timestamp:
+                    try:
+                        upload_date = datetime.fromtimestamp(timestamp)
+                        now = datetime.now()
+                        delta = now - upload_date
+                        if delta < timedelta(hours=1):
+                            minutes = int(delta.total_seconds() / 60)
+                            upload_date = f"{minutes} min ago" if minutes > 1 else "just now"
+                        elif delta < timedelta(days=1):
+                            hours = int(delta.total_seconds() / 3600)
+                            upload_date = f"{hours} hour{'s' if hours > 1 else ''} ago"
+                        elif delta < timedelta(days=30):
+                            days = delta.days
+                            upload_date = f"{days} day{'s' if days > 1 else ''} ago"
+                        elif delta < timedelta(days=365):
+                            months = delta.days // 30
+                            upload_date = f"{months} month{'s' if months > 1 else ''} ago"
+                        else:
+                            years = delta.days // 365
+                            upload_date = f"{years} year{'s' if years > 1 else ''} ago"
+                    except:
+                        upload_date = None
                 
                 results.append({
                     "id": data.get("id"),
@@ -119,7 +147,7 @@ class YouTubeService:
                     "thumbnail": thumbnail_url or data.get("thumbnail"),
                     "view_count": data.get("view_count", 0),
                     "duration": data.get("duration", 0),
-                    "uploader": data.get("uploader", "Unknown"),
+                    "uploader": data.get("uploader", data.get("channel", "Unknown")),
                     "channel_id": data.get("channel_id", ""),
                     "upload_date": upload_date
                 })
