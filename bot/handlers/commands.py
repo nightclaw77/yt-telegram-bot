@@ -40,8 +40,9 @@ async def cmd_start(message: Message, command: CommandObject):
 
     await message.answer(
         "🎬 <b>Night YouTube Bot</b>\n\n"
-        "• Send a <b>Video URL</b> to download or summarize.\n"
+        "• Send a <b>YouTube Video URL</b> to download or summarize.\n"
         "• Send a <b>Channel URL</b> to see latest/top/live content.\n"
+        "• Send any <b>Telegram video file</b> (or video document) to compress it.\n"
         "• Use <code>/search query</code> to find videos.\n"
         "• Use <code>/live url</code> to capture a live stream.\n"
         "• Use <code>/cancel</code> to cancel ongoing downloads.\n"
@@ -62,10 +63,11 @@ async def cmd_help(message: Message):
         "/cancel - Cancel ongoing download\n"
         "/history - View download history\n"
         "/help - Show this help message\n\n"
-        "<b>Supported URLs:</b>\n"
+        "<b>Supported input:</b>\n"
         "• YouTube video links\n"
         "• YouTube channel links\n"
-        "• YouTube playlist links"
+        "• YouTube playlist links\n"
+        "• Telegram uploaded video files (compression)"
     )
 
 

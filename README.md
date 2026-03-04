@@ -7,6 +7,7 @@ A powerful Telegram bot for downloading, searching, and summarizing YouTube cont
 - 📥 **Video Downloader:** Support for multiple qualities (Best, 720p).
 - 🎵 **Audio Extractor:** Extract high-quality MP3 from any video.
 - 📝 **AI Summarizer:** Generate structured summaries of long videos using AI.
+- 🗜️ **Telegram Video Compressor:** Send any Telegram video/video-document and get a smaller compressed file back.
 - 🔍 **YouTube Search:** Search for videos directly from Telegram using `/search`.
 - 🏢 **Channel Overview:** Send a channel link to see:
   - 🆕 Latest 3 uploads
