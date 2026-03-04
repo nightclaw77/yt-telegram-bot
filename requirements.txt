@@ -1,6 +1,6 @@
 # Core
 aiogram==3.4.1
-yt-dlp==2024.12.23
+yt-dlp>=2026.3.3
 python-dotenv==1.0.0
 
 # Database
