@@ -74,7 +74,16 @@ async def authorize_user(handler, event, data):
     if user_id is None:
         return await handler(event, data)
     
-    if user_id not in config.ALLOWED_USER_IDS:
+    chat_id = None
+    if isinstance(event, Message):
+        chat_id = event.chat.id
+    elif isinstance(event, CallbackQuery) and event.message:
+        chat_id = event.message.chat.id
+
+    allowed_user = user_id in config.ALLOWED_USER_IDS
+    allowed_chat = chat_id in config.ALLOWED_CHAT_IDS if chat_id is not None else False
+
+    if not (allowed_user or allowed_chat):
         if isinstance(event, Message):
             await event.answer("⛔️ Sorry, you're not authorized to use this bot.")
         elif isinstance(event, CallbackQuery):

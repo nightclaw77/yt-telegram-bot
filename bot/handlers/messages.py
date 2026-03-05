@@ -13,6 +13,7 @@ from bot.services.bale_bridge import bale_bridge_service
 from bot.services.file_cache import file_cache_service
 from bot.services.secure_package import create_secure_zip_many, DEFAULT_PASSWORD
 from bot.services.local_media_registry import resolve as resolve_local_media, remember as remember_local_media
+from bot.services.direct_fetch import direct_fetch_service
 from bot.utils.rate_limiter import RateLimiter
 from bot.utils.validators import validate_youtube_url, is_channel_url
 from bot.utils.url_shortener import shorten_callback
@@ -119,6 +120,8 @@ async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: st
 @router.message(F.video)
 async def handle_uploaded_video(message: Message, bot: Bot):
     """Compress Telegram-uploaded video files or collect in batch mode."""
+    if not _group_triggered(message):
+        return
     user_id = message.from_user.id
     if _is_batch_on(user_id):
         await batch_add(user_id, message.video.file_id, message.video.file_name or f"video_{message.message_id}.mp4", message.video.file_size)
@@ -132,6 +135,8 @@ async def handle_uploaded_video(message: Message, bot: Bot):
 @router.message(F.photo)
 async def handle_uploaded_photo(message: Message, bot: Bot):
     """Collect/forward photos to Bale with caption support."""
+    if not _group_triggered(message):
+        return
     user_id = message.from_user.id
     largest = message.photo[-1]
     name = f"photo_{message.message_id}.jpg"
@@ -149,6 +154,8 @@ async def handle_uploaded_photo(message: Message, bot: Bot):
 @router.message(F.document)
 async def handle_uploaded_video_document(message: Message, bot: Bot):
     """Handle uploaded documents: batch collect or video-compress path."""
+    if not _group_triggered(message):
+        return
     user_id = message.from_user.id
     mime = (message.document.mime_type or "").lower()
 
@@ -169,6 +176,18 @@ async def handle_uploaded_video_document(message: Message, bot: Bot):
             )
         return
     await _compress_and_send(message, bot, file_id=message.document.file_id, name_hint=message.document.file_name)
+
+
+def _group_triggered(message: Message) -> bool:
+    if message.chat.type == "private":
+        return True
+    username = (config.TELEGRAM_BOT_USERNAME or "").strip("@")
+    text = ((message.text or "") + " " + (message.caption or "")).lower()
+    if username and f"@{username.lower()}" in text:
+        return True
+    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot:
+        return True
+    return False
 
 
 async def _compress_and_send(message: Message, bot: Bot, file_id: str, name_hint: str | None = None):
@@ -254,6 +273,8 @@ async def _compress_and_send(message: Message, bot: Bot, file_id: str, name_hint
 @router.message(F.audio)
 async def handle_uploaded_audio(message: Message, bot: Bot):
     """Collect uploaded audio in batch mode or forward to Bale."""
+    if not _group_triggered(message):
+        return
     user_id = message.from_user.id
     if _is_batch_on(user_id):
         await batch_add(user_id, message.audio.file_id, message.audio.file_name or f"audio_{message.message_id}.mp3", message.audio.file_size)
@@ -347,6 +368,8 @@ async def send_batch_to_bale(message: Message, bot: Bot):
 @router.message(F.text)
 async def handle_text_input(message: Message, bot: Bot):
     """Handle incoming text messages - process URLs."""
+    if not _group_triggered(message):
+        return
     text = message.text.strip()
 
     if text == "📦 Batch ON":
@@ -374,11 +397,27 @@ async def handle_text_input(message: Message, bot: Bot):
         await message.answer("⏳ Too many requests. Please wait a moment.")
         return
     
-    # Validate YouTube URL
+    # Non-YouTube direct URL download flow
     if not validate_youtube_url(text):
-        await message.answer("❌ Invalid YouTube URL. Please send a valid link.")
+        status = await message.answer("📥 لینک مستقیم دریافت شد، در حال دانلود...")
+        local = await direct_fetch_service.download(text, prefix=f"direct_{message.from_user.id}_{message.message_id}")
+        if not local:
+            await status.edit_text("❌ دانلود لینک مستقیم ناموفق بود.")
+            return
+
+        sent = await message.answer_document(FSInputFile(str(local)), caption="Direct link download")
+        try:
+            if getattr(sent, "document", None):
+                remember_local_media(message.from_user.id, sent.document.file_id, str(local))
+        except Exception:
+            pass
+
+        if bale_bridge_service.enabled:
+            ok = await bale_bridge_service.forward_file(local, "document", caption=message.caption)
+            await message.answer("✅ به بله فوروارد شد." if ok else "⚠️ فوروارد به بله ناموفق بود.")
+        await status.delete()
         return
-    
+
     # Check if it's a channel URL
     if is_channel_url(text):
         await handle_channel_url(message, text, bot)

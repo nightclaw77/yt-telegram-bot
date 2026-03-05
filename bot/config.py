@@ -14,6 +14,8 @@ class Config:
     # Telegram Bot
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     ALLOWED_USER_IDS: List[int] = []
+    ALLOWED_CHAT_IDS: List[int] = []
+    TELEGRAM_BOT_USERNAME: str = os.getenv("TELEGRAM_BOT_USERNAME", "")
     
     # Downloads
     DOWNLOADS_DIR: Path = Path(os.getenv("DOWNLOADS_DIR", "./downloads"))
@@ -51,6 +53,14 @@ class Config:
                 if uid.strip().isdigit()
             ]
         
+        chat_ids_str = os.getenv("ALLOWED_CHAT_IDS", "")
+        if chat_ids_str:
+            cls.ALLOWED_CHAT_IDS = [
+                int(cid.strip())
+                for cid in chat_ids_str.split(",")
+                if cid.strip().lstrip("-").isdigit()
+            ]
+
         # Create downloads directory if it doesn't exist
         cls.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
         
