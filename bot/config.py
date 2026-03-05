@@ -16,6 +16,7 @@ class Config:
     ALLOWED_USER_IDS: List[int] = []
     ALLOWED_CHAT_IDS: List[int] = []
     TELEGRAM_BOT_USERNAME: str = os.getenv("TELEGRAM_BOT_USERNAME", "")
+    TELEGRAM_API_BASE: str = os.getenv("TELEGRAM_API_BASE", "")
     
     # Downloads
     DOWNLOADS_DIR: Path = Path(os.getenv("DOWNLOADS_DIR", "./downloads"))

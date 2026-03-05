@@ -16,6 +16,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.types import Message, CallbackQuery, InlineQuery
 
 from bot.config import config
@@ -131,9 +133,15 @@ async def main():
     except Exception as e:
         print(f"Startup cleanup warning: {e}")
     
-    # Initialize bot
+    # Initialize bot (supports local telegram-bot-api server)
+    session = None
+    if config.TELEGRAM_API_BASE:
+        api = TelegramAPIServer.from_base(config.TELEGRAM_API_BASE, is_local=True)
+        session = AiohttpSession(api=api)
+
     bot = Bot(
         token=config.TELEGRAM_BOT_TOKEN,
+        session=session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     
