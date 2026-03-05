@@ -3,7 +3,7 @@ import asyncio
 import logging
 from aiogram import Router, Bot
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
 from bot.config import config
 from bot.services.youtube import YouTubeService
@@ -14,6 +14,17 @@ logger = logging.getLogger(__name__)
 router = Router()
 youtube_service = YouTubeService()
 rate_limiter = RateLimiter(config.RATE_LIMIT_PER_MINUTE)
+
+
+def _main_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="⚙️ Settings"), KeyboardButton(text="📡 Bridge Status")],
+            [KeyboardButton(text="🆘 SOS ON"), KeyboardButton(text="✅ SOS OFF")],
+        ],
+        resize_keyboard=True,
+        selective=True,
+    )
 
 
 @router.message(Command("start"))
@@ -50,7 +61,8 @@ async def cmd_start(message: Message, command: CommandObject):
         "• Use <code>/history</code> to see download history.\n"
         "• Use <code>/settings</code> for Bale mode/encryption/compression.\n"
         "• Use <code>/bridge_status</code> for current bridge/sos status.\n\n"
-        "✨ <b>Inline Mode:</b> Type <code>@Night77_tube_bot query</code> in any chat to search!"
+        "✨ <b>Inline Mode:</b> Type <code>@Night77_tube_bot query</code> in any chat to search!",
+        reply_markup=_main_menu_keyboard()
     )
 
 
@@ -159,6 +171,26 @@ async def cmd_sosoff(message: Message):
     db = Database(); await db.init()
     await db.update_user_settings(message.from_user.id, sos_mode=0)
     await message.answer("✅ SOS mode disabled. Back to normal bridge behavior.")
+
+
+@router.message(lambda m: (m.text or "") == "⚙️ Settings")
+async def btn_settings(message: Message):
+    await cmd_settings(message)
+
+
+@router.message(lambda m: (m.text or "") == "📡 Bridge Status")
+async def btn_bridge_status(message: Message):
+    await cmd_bridge_status(message)
+
+
+@router.message(lambda m: (m.text or "") == "🆘 SOS ON")
+async def btn_sos_on(message: Message):
+    await cmd_sos(message)
+
+
+@router.message(lambda m: (m.text or "") == "✅ SOS OFF")
+async def btn_sos_off(message: Message):
+    await cmd_sosoff(message)
 
 
 @router.message(Command("search"))
