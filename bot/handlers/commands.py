@@ -3,7 +3,7 @@ import asyncio
 import logging
 from aiogram import Router, Bot
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot.config import config
 from bot.services.youtube import YouTubeService
@@ -47,7 +47,8 @@ async def cmd_start(message: Message, command: CommandObject):
         "• Use <code>/search query</code> to find videos.\n"
         "• Use <code>/live url</code> to capture a live stream.\n"
         "• Use <code>/cancel</code> to cancel ongoing downloads.\n"
-        "• Use <code>/history</code> to see download history.\n\n"
+        "• Use <code>/history</code> to see download history.\n"
+        "• Use <code>/settings</code> for Bale mode/encryption/compression.\n\n"
         "✨ <b>Inline Mode:</b> Type <code>@Night77_tube_bot query</code> in any chat to search!"
     )
 
@@ -69,6 +70,37 @@ async def cmd_help(message: Message):
         "• YouTube channel links\n"
         "• YouTube playlist links\n"
         "• Telegram uploaded video files (compression)"
+    )
+
+
+def _settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
+    bale_mode = settings.get("bale_mode", "auto")
+    bale_encrypt = bool(settings.get("bale_encrypt", 1))
+    comp = settings.get("compression_level", "medium")
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"Bale: {'🟢 Auto' if bale_mode=='auto' else '🟡 Manual'}", callback_data="settings_toggle_mode"),
+            InlineKeyboardButton(text=f"Encrypt: {'🔐 ON' if bale_encrypt else '🔓 OFF'}", callback_data="settings_toggle_encrypt"),
+        ],
+        [
+            InlineKeyboardButton(text=f"Compression: {comp}", callback_data="settings_cycle_compression"),
+        ],
+    ])
+
+
+@router.message(Command("settings"))
+async def cmd_settings(message: Message):
+    from bot.database.models import Database
+    db = Database()
+    await db.init()
+    settings = await db.get_user_settings(message.from_user.id)
+    await message.answer(
+        "⚙️ <b>Settings</b>\n\n"
+        "• Bale mode: Auto = send immediately | Manual = show button\n"
+        "• Encrypt: password-protected ZIP for Bale-only transfer\n"
+        "• Compression profile affects compressed-audio defaults",
+        reply_markup=_settings_keyboard(settings)
     )
 
 

@@ -51,6 +51,17 @@ class Database:
             )
         """)
         
+        # User settings table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_settings (
+                telegram_id INTEGER PRIMARY KEY,
+                bale_mode TEXT DEFAULT 'auto',
+                bale_encrypt INTEGER DEFAULT 1,
+                compression_level TEXT DEFAULT 'medium',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Create index for faster queries
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_downloads_user_id 
@@ -211,6 +222,42 @@ class Database:
             "success_rate": (completed / total * 100) if total > 0 else 0
         }
     
+    async def get_user_settings(self, telegram_id: int) -> Dict:
+        """Get or initialize user settings."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM user_settings WHERE telegram_id = ?", (telegram_id,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+
+        cursor.execute(
+            "INSERT OR IGNORE INTO user_settings (telegram_id) VALUES (?)",
+            (telegram_id,),
+        )
+        self.conn.commit()
+        cursor.execute("SELECT * FROM user_settings WHERE telegram_id = ?", (telegram_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else {
+            "telegram_id": telegram_id,
+            "bale_mode": "auto",
+            "bale_encrypt": 1,
+            "compression_level": "medium",
+        }
+
+    async def update_user_settings(self, telegram_id: int, **kwargs):
+        """Update user settings columns."""
+        allowed = {"bale_mode", "bale_encrypt", "compression_level"}
+        items = [(k, v) for k, v in kwargs.items() if k in allowed]
+        if not items:
+            return
+
+        await self.get_user_settings(telegram_id)
+        updates = ", ".join([f"{k} = ?" for k, _ in items] + ["updated_at = CURRENT_TIMESTAMP"])
+        params = [v for _, v in items] + [telegram_id]
+        cursor = self.conn.cursor()
+        cursor.execute(f"UPDATE user_settings SET {updates} WHERE telegram_id = ?", params)
+        self.conn.commit()
+
     async def delete_old_downloads(self, days: int = 30):
         """Delete download records older than specified days."""
         cursor = self.conn.cursor()

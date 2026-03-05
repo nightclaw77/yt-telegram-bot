@@ -1,9 +1,10 @@
 """Callback query handlers for Telegram bot."""
 import asyncio
 import logging
+from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from aiogram import Router, Bot
-from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot.config import config
 from bot.services.youtube import YouTubeService
@@ -11,6 +12,7 @@ from bot.services.downloader import DownloadManager
 from bot.services.summarizer import SummarizerService
 from bot.services.bale_bridge import bale_bridge_service
 from bot.services.file_cache import file_cache_service
+from bot.services.secure_package import create_secure_zip, DEFAULT_PASSWORD
 from bot.utils.url_shortener import reconstruct_url, shorten_callback
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,74 @@ def _canonical_video_ref(url: str) -> str:
     except Exception:
         pass
     return url.strip()
+
+
+async def _get_user_settings(user_id: int) -> dict:
+    from bot.database.models import Database
+    db = Database()
+    await db.init()
+    return await db.get_user_settings(user_id)
+
+
+async def _show_settings(callback: CallbackQuery, user_id: int):
+    settings = await _get_user_settings(user_id)
+    mode = settings.get("bale_mode", "auto")
+    enc = bool(settings.get("bale_encrypt", 1))
+    comp = settings.get("compression_level", "medium")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"Bale: {'🟢 Auto' if mode=='auto' else '🟡 Manual'}", callback_data="settings_toggle_mode"),
+            InlineKeyboardButton(text=f"Encrypt: {'🔐 ON' if enc else '🔓 OFF'}", callback_data="settings_toggle_encrypt"),
+        ],
+        [InlineKeyboardButton(text=f"Compression: {comp}", callback_data="settings_cycle_compression")],
+    ])
+    await callback.message.edit_text("⚙️ Settings updated.", reply_markup=kb)
+
+
+async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_type: str, force_send: bool = False):
+    settings = await _get_user_settings(user_id)
+    mode = settings.get("bale_mode", "auto")
+
+    work_path = Path(local_path)
+    slim_tmp = None
+    secure_tmp = None
+
+    # Safe-size path for Bale delivery
+    bale_max_bytes = config.BALE_SAFE_MAX_MB * 1024 * 1024
+    if media_type == "audio" and work_path.exists() and work_path.stat().st_size > bale_max_bytes:
+        await bot.send_message(user_id, f"ℹ️ فایل برای بله بزرگ بود ({work_path.stat().st_size / (1024*1024):.1f}MB). نسخه سبک‌تر می‌سازم...")
+        from bot.services.audio_compressor import AudioCompressionService
+        ac = AudioCompressionService()
+        slim = await ac.compress_audio(work_path, target_bitrate_k=32, sample_rate=22050, channels=1)
+        if slim:
+            work_path = slim
+            slim_tmp = slim
+
+    if mode == "manual" and not force_send:
+        key = file_cache_service.make_key("bale-manual", str(user_id), media_type, str(work_path))
+        cached = file_cache_service.put(key, work_path)
+        if cached:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📤 ارسال به بله", callback_data=f"bale_send|{key}|{media_type}")]])
+            await bot.send_message(user_id, "ارسال به بله در حالت دستی است.", reply_markup=kb)
+        if slim_tmp and slim_tmp.exists() and not file_cache_service.is_cache_file(slim_tmp):
+            slim_tmp.unlink(missing_ok=True)
+        return
+
+    bale_send_path = work_path
+    if bool(settings.get("bale_encrypt", 1)):
+        zipped = await create_secure_zip(work_path, settings.get("compression_level", "medium"), DEFAULT_PASSWORD)
+        if zipped:
+            bale_send_path = zipped
+            secure_tmp = zipped
+
+    media_for_send = "document" if str(bale_send_path).endswith(".zip") else media_type
+    bale_ok = await bale_bridge_service.forward_file(bale_send_path, media_for_send, caption="Night bridge")
+    await bot.send_message(user_id, "✅ فایل به بله ارسال شد." if bale_ok else "⚠️ ارسال فایل به بله ناموفق بود.")
+
+    if slim_tmp and slim_tmp.exists() and not file_cache_service.is_cache_file(slim_tmp):
+        slim_tmp.unlink(missing_ok=True)
+    if secure_tmp and secure_tmp.exists() and not file_cache_service.is_cache_file(secure_tmp):
+        secure_tmp.unlink(missing_ok=True)
 
 
 async def show_quality_options(user_id: int, url: str, mode: str, bot: Bot):
@@ -107,6 +177,49 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
     # instead of editing the original message (which might not exist in inline context)
     is_inline = callback.message is None or callback.inline_message_id is not None
     
+    if action == "settings_toggle_mode":
+        from bot.database.models import Database
+        db = Database(); await db.init()
+        s = await db.get_user_settings(callback.from_user.id)
+        next_mode = "manual" if s.get("bale_mode", "auto") == "auto" else "auto"
+        await db.update_user_settings(callback.from_user.id, bale_mode=next_mode)
+        await _show_settings(callback, callback.from_user.id)
+        await callback.answer("Bale mode updated")
+        return
+
+    if action == "settings_toggle_encrypt":
+        from bot.database.models import Database
+        db = Database(); await db.init()
+        s = await db.get_user_settings(callback.from_user.id)
+        next_val = 0 if int(s.get("bale_encrypt", 1)) else 1
+        await db.update_user_settings(callback.from_user.id, bale_encrypt=next_val)
+        await _show_settings(callback, callback.from_user.id)
+        await callback.answer("Encryption updated")
+        return
+
+    if action == "settings_cycle_compression":
+        from bot.database.models import Database
+        db = Database(); await db.init()
+        s = await db.get_user_settings(callback.from_user.id)
+        cur = s.get("compression_level", "medium")
+        levels = ["low", "medium", "high"]
+        next_level = levels[(levels.index(cur) + 1) % len(levels)] if cur in levels else "medium"
+        await db.update_user_settings(callback.from_user.id, compression_level=next_level)
+        await _show_settings(callback, callback.from_user.id)
+        await callback.answer("Compression profile updated")
+        return
+
+    if action == "bale_send":
+        key = parts[1] if len(parts) > 1 else ""
+        media = parts[2] if len(parts) > 2 else "document"
+        local = file_cache_service.get(key)
+        if not local:
+            await callback.answer("فایل منقضی شده یا پیدا نشد", show_alert=True)
+            return
+        await _send_or_offer_bale(callback.from_user.id, bot, local, media, force_send=True)
+        await callback.answer("در حال ارسال به بله...")
+        return
+
     if action == "info":
         from bot.handlers.messages import show_video_options
         if is_inline:
@@ -244,7 +357,7 @@ async def handle_video_download(callback: CallbackQuery, url: str, format_id: st
     
     if path:
         # Upload with retry logic
-        success = await upload_with_retry(bot, callback.message, "video", path)
+        success = await upload_with_retry(bot, callback.message, "video", path, user_id=callback.from_user.id)
         
         if success:
             # Save to history
@@ -310,7 +423,7 @@ async def handle_audio_download(callback: CallbackQuery, url: str, bot: Bot):
     path = await download_manager.wait_for_download(task_id)
     
     if path:
-        success = await upload_with_retry(bot, callback.message, "audio", path)
+        success = await upload_with_retry(bot, callback.message, "audio", path, user_id=callback.from_user.id)
         
         if success:
             from bot.database.models import Database
@@ -367,7 +480,7 @@ async def handle_live_capture(callback: CallbackQuery, url: str, bot: Bot):
     path = await download_manager.wait_for_download(task_id)
     
     if path:
-        success = await upload_with_retry(bot, callback.message, "video", path)
+        success = await upload_with_retry(bot, callback.message, "video", path, user_id=callback.from_user.id)
         if success:
             await callback.message.answer("✅ Live stream captured and uploaded!")
         else:
@@ -379,7 +492,7 @@ async def handle_live_capture(callback: CallbackQuery, url: str, bot: Bot):
     await status_msg.delete()
 
 
-async def upload_with_retry(bot: Bot, message, media_type: str, path: str, max_retries: int = 3):
+async def upload_with_retry(bot: Bot, message, media_type: str, path: str, user_id: int | None = None, max_retries: int = 3):
     """Upload file to Telegram with retry, then optionally forward to Bale."""
     import os
 
@@ -390,12 +503,10 @@ async def upload_with_retry(bot: Bot, message, media_type: str, path: str, max_r
             elif media_type == "audio":
                 await message.answer_audio(FSInputFile(path))
 
-            # Forward to Bale (optional, non-blocking failure)
-            bale_media_type = media_type if media_type in {"video", "audio"} else "document"
-            bale_ok = await bale_bridge_service.forward_file(path, bale_media_type, caption="Forwarded from Night YouTube Bot")
-            if bale_bridge_service.enabled:
-                notice = "✅ فایل به بله هم ارسال شد." if bale_ok else "⚠️ ارسال به بله ناموفق بود (تلگرام انجام شد)."
-                await message.answer(notice)
+            # Forward to Bale / offer manual send based on user settings
+            if bale_bridge_service.enabled and user_id:
+                bale_media_type = media_type if media_type in {"video", "audio"} else "document"
+                await _send_or_offer_bale(user_id, bot, path, bale_media_type)
 
             # Only remove non-cached temp files after Telegram upload completes
             if os.path.exists(path) and not file_cache_service.is_cache_file(path):
@@ -554,7 +665,7 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
         except:
             pass
         
-        success = await upload_with_retry(bot, status_msg, "video", final_path)
+        success = await upload_with_retry(bot, status_msg, "video", final_path, user_id=user_id)
         
         if success:
             from bot.database.models import Database
@@ -651,8 +762,11 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
                 pass
             
             from bot.services.audio_compressor import AudioCompressionService
+            settings = await _get_user_settings(user_id)
+            bitrate_map = {"low": 48, "medium": 64, "high": 96}
+            bitrate = bitrate_map.get(settings.get("compression_level", "medium"), 64)
             audio_compressor = AudioCompressionService()
-            compressed_path = await audio_compressor.compress_audio(Path(path), target_bitrate_k=64)
+            compressed_path = await audio_compressor.compress_audio(Path(path), target_bitrate_k=bitrate)
             
             if compressed_path:
                 import os
@@ -710,35 +824,7 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
             )
 
             if bale_bridge_service.enabled:
-                from pathlib import Path as _Path
-                bale_path = _Path(final_path)
-                bale_max_bytes = config.BALE_SAFE_MAX_MB * 1024 * 1024
-                cleanup_bale_temp = None
-
-                if bale_path.stat().st_size > bale_max_bytes:
-                    await bot.send_message(
-                        user_id,
-                        f"ℹ️ فایل برای بله بزرگ بود ({bale_path.stat().st_size / (1024*1024):.1f}MB). نسخه سبک‌تر می‌سازم..."
-                    )
-                    from bot.services.audio_compressor import AudioCompressionService
-                    _ac = AudioCompressionService()
-                    slim = await _ac.compress_audio(bale_path, target_bitrate_k=32, sample_rate=22050, channels=1)
-                    if slim:
-                        bale_path = slim
-                        cleanup_bale_temp = slim
-
-                bale_ok = await bale_bridge_service.forward_file(
-                    bale_path,
-                    "audio",
-                    caption=f"Forwarded audio from Night YouTube Bot ({bale_path.stat().st_size / (1024*1024):.1f}MB)"
-                )
-                await bot.send_message(
-                    user_id,
-                    "✅ فایل صوتی به بله هم ارسال شد." if bale_ok else "⚠️ ارسال فایل صوتی به بله ناموفق بود."
-                )
-
-                if cleanup_bale_temp and cleanup_bale_temp.exists() and not file_cache_service.is_cache_file(cleanup_bale_temp):
-                    cleanup_bale_temp.unlink(missing_ok=True)
+                await _send_or_offer_bale(user_id, bot, final_path, "audio")
 
             import os
             if os.path.exists(final_path) and not file_cache_service.is_cache_file(final_path):
@@ -818,7 +904,7 @@ async def handle_live_capture_inline(callback: CallbackQuery, url: str, bot: Bot
     path = await download_manager.wait_for_download(task_id)
     
     if path:
-        success = await upload_with_retry(bot, status_msg, "video", path)
+        success = await upload_with_retry(bot, status_msg, "video", path, user_id=user_id)
         if success:
             await bot.send_message(user_id, "✅ Live stream captured and uploaded!")
         else:
