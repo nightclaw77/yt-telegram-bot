@@ -112,6 +112,9 @@ class DownloadManager:
             ]
             
             if task.mode == "audio":
+                # bestaudio may be unavailable on some YouTube responses; fallback to best muxed stream
+                if task.format_id == "bestaudio":
+                    cmd[2] = "bestaudio/best"
                 cmd.extend(["-x", "--audio-format", "mp3"])
             elif task.mode == "live":
                 cmd.extend(["--live-from-start"])
