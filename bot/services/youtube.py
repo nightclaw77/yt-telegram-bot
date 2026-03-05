@@ -2,8 +2,16 @@
 import asyncio
 import json
 import logging
+import os
+import subprocess
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
+from subprocess import TimeoutExpired
+
+# Get yt-dlp path - prefer venv version
+VENV_BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "venv", "bin")
+VENV_YTDLP = os.path.join(VENV_BIN, "yt-dlp")
+YTDLP_CMD = VENV_YTDLP if os.path.exists(VENV_YTDLP) else "yt-dlp"
 
 logger = logging.getLogger(__name__)
 
@@ -12,13 +20,13 @@ def get_relative_time(upload_date_str: str) -> str:
     """Convert YYYYMMDD to relative time like '2 hours ago', '3 days ago'."""
     if not upload_date_str or len(upload_date_str) != 8:
         return None
-    
+
     try:
         # Parse date from YYYYMMDD format
         upload_date = datetime.strptime(upload_date_str, "%Y%m%d")
         now = datetime.now()
         delta = now - upload_date
-        
+
         if delta < timedelta(hours=1):
             minutes = int(delta.total_seconds() / 60)
             if minutes <= 1:
@@ -46,30 +54,24 @@ def get_relative_time(upload_date_str: str) -> str:
             return f"{years} years ago"
     except:
         return None
-    
+
     return None
 
 
 class YouTubeService:
     """Service for YouTube operations using yt-dlp."""
-    
+
     async def get_video_info(self, url: str) -> Optional[Dict]:
         """Get video information from URL."""
-        cmd = ["yt-dlp", "--dump-json", "--no-playlist", url]
+        cmd = [YTDLP_CMD, "--dump-json", "--no-playlist", url]
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd, 
-                stdout=asyncio.subprocess.PIPE, 
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0:
-                data = json.loads(stdout.decode())
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if proc.returncode == 0:
+                data = json.loads(proc.stdout)
                 # Convert upload_date to relative time
                 upload_date_str = data.get("upload_date", "")
                 upload_date = get_relative_time(upload_date_str) if upload_date_str else None
-                
+
                 return {
                     "id": data.get("id"),
                     "title": data.get("title", "Unknown"),
@@ -83,27 +85,25 @@ class YouTubeService:
         except Exception as e:
             logger.error(f"Error getting video info: {e}")
         return None
-    
+
     async def search(self, query: str, limit: int = 5) -> List[Dict]:
         """Search YouTube for videos."""
-        cmd = ["yt-dlp", f"ytsearch{limit}:{query}", "--dump-json"]
+        cmd = [YTDLP_CMD, f"ytsearch{limit}:{query}", "--dump-json", "--flat-playlist"]
         results = []
-        
+
         try:
             process = await asyncio.create_subprocess_exec(
-                *cmd, 
-                stdout=asyncio.subprocess.PIPE, 
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
-            
+
             for line in stdout.decode().splitlines():
                 if not line.strip():
                     continue
                 data = json.loads(line)
-                
-                # Skip non-video entries (channels, playlists, etc.)
-                if data.get("_type") != "url" or data.get("ie_key") != "Youtube":
+                if not data.get("id") or not data.get("title"):
                     continue
                 
                 # Get thumbnail - prefer default or medium quality
@@ -117,7 +117,7 @@ class YouTubeService:
                             # Prefer medium or high quality
                             if thumb.get("height", 0) >= 180:
                                 break
-                
+
                 # Format upload date to relative time - only available for individual video info
                 # Search results don't have upload_date, so we'll use timestamp if available
                 timestamp = data.get("timestamp")
@@ -144,7 +144,7 @@ class YouTubeService:
                             upload_date = f"{years} year{'s' if years > 1 else ''} ago"
                     except:
                         upload_date = None
-                
+
                 results.append({
                     "id": data.get("id"),
                     "title": data.get("title"),
@@ -156,46 +156,54 @@ class YouTubeService:
                     "channel_id": data.get("channel_id", ""),
                     "upload_date": upload_date
                 })
+
+            # Enrich top results with relative upload date (best effort)
+            for item in results[: min(5, len(results))]:
+                if item.get("upload_date"):
+                    continue
+                info = await self.get_video_info(item.get("url", ""))
+                if info and info.get("upload_date"):
+                    item["upload_date"] = info.get("upload_date")
         except Exception as e:
             logger.error(f"Search error: {e}")
-        
+
         return results
-    
+
     async def get_channel_videos(
-        self, 
-        channel_url: str, 
-        mode: str = "latest", 
+        self,
+        channel_url: str,
+        mode: str = "latest",
         limit: int = 3
     ) -> List[Dict]:
         """Get channel videos (latest, top, or live)."""
         # mode: latest, top, live
         cmd = [
-            "yt-dlp", 
-            "--dump-json", 
-            "--flat-playlist", 
-            "--playlist-end", 
+            YTDLP_CMD,
+            "--dump-json",
+            "--flat-playlist",
+            "--playlist-end",
             str(limit)
         ]
-        
+
         if mode == "top":
             cmd.extend(["--order", "relevance"])
-        
+
         if mode == "live":
             # Specific live stream probe
             target = channel_url.rstrip("/") + "/live"
-            cmd = ["yt-dlp", "--dump-json", "--no-playlist", target]
+            cmd = [YTDLP_CMD, "--dump-json", "--no-playlist", target]
         else:
             cmd.append(channel_url)
-            
+
         videos = []
         try:
             process = await asyncio.create_subprocess_exec(
-                *cmd, 
-                stdout=asyncio.subprocess.PIPE, 
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
-            
+
             for line in stdout.decode().splitlines():
                 if not line.strip():
                     continue
@@ -207,25 +215,25 @@ class YouTubeService:
                 })
         except Exception as e:
             logger.error(f"Channel fetch error ({mode}): {e}")
-        
+
         return videos
-    
+
     async def get_formats(self, url: str) -> List[Dict]:
         """Get available formats for a video."""
-        cmd = ["yt-dlp", "--dump-json", "--no-playlist", "--list-formats", url]
-        
+        cmd = [YTDLP_CMD, "--dump-json", "--no-playlist", "--list-formats", url]
+
         try:
             process = await asyncio.create_subprocess_exec(
-                *cmd, 
-                stdout=asyncio.subprocess.PIPE, 
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode == 0:
                 data = json.loads(stdout.decode())
                 return data.get("formats", [])
         except Exception as e:
             logger.error(f"Error getting formats: {e}")
-        
+
         return []
