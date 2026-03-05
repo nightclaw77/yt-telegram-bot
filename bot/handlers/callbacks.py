@@ -640,11 +640,22 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
                 caption=caption,
                 duration=duration_sec if duration_sec > 0 else None
             )
-            
+
+            if bale_bridge_service.enabled:
+                bale_ok = await bale_bridge_service.forward_file(
+                    final_path,
+                    "audio",
+                    caption="Forwarded audio from Night YouTube Bot"
+                )
+                await bot.send_message(
+                    user_id,
+                    "✅ فایل صوتی به بله هم ارسال شد." if bale_ok else "⚠️ ارسال فایل صوتی به بله ناموفق بود."
+                )
+
             import os
             if os.path.exists(final_path):
                 os.remove(final_path)
-            
+
             # Save to history
             from bot.database.models import Database
             db = Database()
