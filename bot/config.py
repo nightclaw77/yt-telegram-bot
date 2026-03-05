@@ -34,6 +34,8 @@ class Config:
     BALE_BOT_TOKEN: str = os.getenv("BALE_BOT_TOKEN", "")
     BALE_CHAT_ID: str = os.getenv("BALE_CHAT_ID", "")
     BALE_FORWARD_ENABLED: bool = os.getenv("BALE_FORWARD_ENABLED", "false").lower() == "true"
+    BALE_RELAY_URL: str = os.getenv("BALE_RELAY_URL", "")
+    BALE_RELAY_TOKEN: str = os.getenv("BALE_RELAY_TOKEN", "")
 
     # File cache (reuse recent outputs)
     FILE_CACHE_ENABLED: bool = os.getenv("FILE_CACHE_ENABLED", "true").lower() == "true"

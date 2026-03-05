@@ -19,6 +19,8 @@ class BaleBridgeService:
     def __init__(self) -> None:
         self.token = config.BALE_BOT_TOKEN
         self.chat_id = config.BALE_CHAT_ID
+        self.relay_url = (config.BALE_RELAY_URL or "").rstrip("/")
+        self.relay_token = config.BALE_RELAY_TOKEN or ""
         self.enabled = bool(config.BALE_FORWARD_ENABLED and self.token and self.chat_id)
 
     async def forward_file(self, file_path: str | Path, media_type: str, caption: Optional[str] = None) -> bool:
@@ -106,6 +108,53 @@ class BaleBridgeService:
                     continue
                 return False
 
+        # final fallback via relay node (if configured)
+        return await self._relay_file(path, media_type, caption)
+
+
+    async def _relay_file(self, path: Path, media_type: str, caption: Optional[str]) -> bool:
+        if not self.relay_url:
+            return False
+        endpoint = f"{self.relay_url}/relay/file"
+        headers = {"x-relay-token": self.relay_token} if self.relay_token else {}
+        for attempt in range(3):
+            try:
+                timeout = aiohttp.ClientTimeout(total=300)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    form = aiohttp.FormData()
+                    form.add_field("media_type", media_type)
+                    if caption:
+                        form.add_field("caption", caption[:900])
+                    with path.open("rb") as f:
+                        form.add_field("file", f, filename=path.name, content_type="application/octet-stream")
+                        async with session.post(endpoint, data=form, headers=headers) as resp:
+                            data = await resp.json(content_type=None)
+                            if bool(data.get("ok")):
+                                return True
+                await asyncio.sleep(1.2 * (attempt + 1))
+            except Exception:
+                logger.exception("Bale relay file forward failed (attempt %s)", attempt + 1)
+                await asyncio.sleep(1.2 * (attempt + 1))
+        return False
+
+    async def _relay_text(self, text: str) -> bool:
+        if not self.relay_url:
+            return False
+        endpoint = f"{self.relay_url}/relay/text"
+        headers = {"x-relay-token": self.relay_token} if self.relay_token else {}
+        payload = {"text": text[:3800]}
+        for attempt in range(3):
+            try:
+                timeout = aiohttp.ClientTimeout(total=60)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(endpoint, json=payload, headers=headers) as resp:
+                        data = await resp.json(content_type=None)
+                        if bool(data.get("ok")):
+                            return True
+                await asyncio.sleep(1.2 * (attempt + 1))
+            except Exception:
+                logger.exception("Bale relay text forward failed (attempt %s)", attempt + 1)
+                await asyncio.sleep(1.2 * (attempt + 1))
         return False
 
 
@@ -127,14 +176,14 @@ class BaleBridgeService:
                         if int(data.get("error_code", 0)) >= 500 and attempt < 2:
                             await asyncio.sleep(1.2 * (attempt + 1))
                             continue
-                        return False
+                        break
             except Exception:
                 logger.exception("Bale text forward failed (attempt %s)", attempt + 1)
                 if attempt < 2:
                     await asyncio.sleep(1.2 * (attempt + 1))
                     continue
-                return False
-        return False
+                break
+        return await self._relay_text(text)
 
 
 bale_bridge_service = BaleBridgeService()
