@@ -9,6 +9,7 @@ from bot.services.youtube import YouTubeService
 from bot.services.downloader import DownloadManager
 from bot.services.summarizer import SummarizerService
 from bot.services.bale_bridge import bale_bridge_service
+from bot.services.file_cache import file_cache_service
 from bot.utils.url_shortener import reconstruct_url, shorten_callback
 
 logger = logging.getLogger(__name__)
@@ -376,8 +377,8 @@ async def upload_with_retry(bot: Bot, message, media_type: str, path: str, max_r
                 notice = "✅ فایل به بله هم ارسال شد." if bale_ok else "⚠️ ارسال به بله ناموفق بود (تلگرام انجام شد)."
                 await message.answer(notice)
 
-            # Only remove file after Telegram upload completes
-            if os.path.exists(path):
+            # Only remove non-cached temp files after Telegram upload completes
+            if os.path.exists(path) and not file_cache_service.is_cache_file(path):
                 os.remove(path)
             return True
 
@@ -446,22 +447,34 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
     except:
         pass
     
-    task_id = download_manager.add_download(
-        user_id=user_id,
-        url=url,
-        format_id=format_id,
-        mode="video",
-        progress_callback=progress_callback
-    )
-    
-    path = await download_manager.wait_for_download(task_id)
-    chat_id = user_id
-    
+    base_cache_key = file_cache_service.make_key("yt", "video", url, format_id)
+    compressed_cache_key = file_cache_service.make_key("yt", "video", url, format_id, "compressed")
+
+    path = file_cache_service.get(compressed_cache_key if compress else base_cache_key)
+    if path:
+        try:
+            await bot.edit_message_text(
+                chat_id=user_id,
+                message_id=status_msg.message_id,
+                text=f"🎬 <b>{title}</b>\n\n♻️ از نسخه کش‌شده استفاده شد\n📤 Uploading..."
+            )
+        except Exception:
+            pass
+    else:
+        task_id = download_manager.add_download(
+            user_id=user_id,
+            url=url,
+            format_id=format_id,
+            mode="video",
+            progress_callback=progress_callback
+        )
+        path = await download_manager.wait_for_download(task_id)
+
     if path:
         final_path = path
-        
+
         # Compress if requested
-        if compress:
+        if compress and not file_cache_service.get(compressed_cache_key):
             try:
                 await bot.edit_message_text(
                     chat_id=user_id,
@@ -482,11 +495,15 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
                 import os
                 original_mb = os.path.getsize(path) / (1024 * 1024)
                 compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
-                
-                # Remove original, use compressed
-                os.remove(path)
-                final_path = str(compressed_path)
-                
+
+                # Cache compressed output and keep original if cached
+                cached_compressed = file_cache_service.put(compressed_cache_key, compressed_path)
+                if not file_cache_service.is_cache_file(path) and os.path.exists(path):
+                    os.remove(path)
+                if compressed_path.exists() and not file_cache_service.is_cache_file(compressed_path):
+                    compressed_path.unlink(missing_ok=True)
+                final_path = cached_compressed or str(compressed_path)
+
                 try:
                     await bot.edit_message_text(
                         chat_id=user_id,
@@ -498,6 +515,12 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
                 except:
                     pass
         
+        # Cache non-compressed download for reuse
+        if not compress and not file_cache_service.is_cache_file(final_path):
+            cached_path = file_cache_service.put(base_cache_key, final_path)
+            if cached_path:
+                final_path = cached_path
+
         # Update to uploading status
         try:
             await bot.edit_message_text(
@@ -567,22 +590,35 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
         except Exception:
             pass
     
-    task_id = download_manager.add_download(
-        user_id=user_id,
-        url=url,
-        format_id="bestaudio",
-        mode="audio",
-        progress_callback=progress_callback
-    )
-    
-    path = await download_manager.wait_for_download(task_id)
-    
+    base_cache_key = file_cache_service.make_key("yt", "audio", url, "bestaudio")
+    compressed_cache_key = file_cache_service.make_key("yt", "audio", url, "bestaudio", "compressed-64k")
+
+    path = file_cache_service.get(compressed_cache_key if compress else base_cache_key)
+    if path:
+        try:
+            await bot.edit_message_text(
+                chat_id=user_id,
+                message_id=status_msg.message_id,
+                text="🎵 ♻️ از نسخه کش‌شده استفاده شد\n📤 Uploading..."
+            )
+        except Exception:
+            pass
+    else:
+        task_id = download_manager.add_download(
+            user_id=user_id,
+            url=url,
+            format_id="bestaudio",
+            mode="audio",
+            progress_callback=progress_callback
+        )
+        path = await download_manager.wait_for_download(task_id)
+
     if path:
         from pathlib import Path
         final_path = path
         
         # Compress if requested
-        if compress:
+        if compress and not file_cache_service.get(compressed_cache_key):
             try:
                 await bot.edit_message_text(
                     chat_id=user_id,
@@ -600,10 +636,14 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
                 import os
                 original_mb = os.path.getsize(path) / (1024 * 1024)
                 compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
-                
-                os.remove(path)
-                final_path = str(compressed_path)
-                
+
+                cached_compressed = file_cache_service.put(compressed_cache_key, compressed_path)
+                if not file_cache_service.is_cache_file(path) and os.path.exists(path):
+                    os.remove(path)
+                if compressed_path.exists() and not file_cache_service.is_cache_file(compressed_path):
+                    compressed_path.unlink(missing_ok=True)
+                final_path = cached_compressed or str(compressed_path)
+
                 try:
                     await bot.edit_message_text(
                         chat_id=user_id,
@@ -615,6 +655,12 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
                 except:
                     pass
         
+        # Cache non-compressed output for reuse
+        if not compress and not file_cache_service.is_cache_file(final_path):
+            cached_path = file_cache_service.put(base_cache_key, final_path)
+            if cached_path:
+                final_path = cached_path
+
         # Get audio metadata before upload
         from bot.services.audio_compressor import AudioCompressionService
         audio_comp = AudioCompressionService()
@@ -653,7 +699,7 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
                 )
 
             import os
-            if os.path.exists(final_path):
+            if os.path.exists(final_path) and not file_cache_service.is_cache_file(final_path):
                 os.remove(final_path)
 
             # Save to history

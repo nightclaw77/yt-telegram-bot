@@ -31,11 +31,11 @@ class BaleBridgeService:
             return False
 
         method_map = {
-            "video": "sendVideo",
-            "audio": "sendAudio",
-            "document": "sendDocument",
+            "video": ("sendVideo", "video"),
+            "audio": ("sendAudio", "audio"),
+            "document": ("sendDocument", "document"),
         }
-        method = method_map.get(media_type, "sendDocument")
+        method, media_field = method_map.get(media_type, ("sendDocument", "document"))
 
         endpoint = f"https://tapi.bale.ai/bot{self.token}/{method}"
 
@@ -46,7 +46,7 @@ class BaleBridgeService:
 
         with path.open("rb") as f:
             form.add_field(
-                "file",
+                media_field,
                 f,
                 filename=path.name,
                 content_type="application/octet-stream",

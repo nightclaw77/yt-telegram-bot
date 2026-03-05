@@ -9,6 +9,7 @@ from bot.config import config
 from bot.services.youtube import YouTubeService
 from bot.services.compressor import CompressionService
 from bot.services.bale_bridge import bale_bridge_service
+from bot.services.file_cache import file_cache_service
 from bot.utils.rate_limiter import RateLimiter
 from bot.utils.validators import validate_youtube_url, is_channel_url
 from bot.utils.url_shortener import shorten_callback
@@ -50,18 +51,33 @@ async def _compress_and_send(message: Message, bot: Bot, file_id: str, name_hint
         if name_hint and "." in name_hint:
             ext = Path(name_hint).suffix or ".mp4"
 
-        original_path = config.DOWNLOADS_DIR / f"incoming_{message.from_user.id}_{message.message_id}{ext}"
+        cache_key = file_cache_service.make_key("tg-upload", file_id, "compressed")
+        cached_path = file_cache_service.get(cache_key)
+        if cached_path:
+            compressed_path = Path(cached_path)
+            await status.edit_text("♻️ نسخه کش‌شده پیدا شد، در حال ارسال...")
+        else:
+            original_path = config.DOWNLOADS_DIR / f"incoming_{message.from_user.id}_{message.message_id}{ext}"
 
-        tg_file = await bot.get_file(file_id)
-        await bot.download(tg_file, destination=original_path)
+            tg_file = await bot.get_file(file_id)
+            await bot.download(tg_file, destination=original_path)
 
-        compressed_path = await compressor_service.compress_video(original_path)
+            compressed_path = await compressor_service.compress_video(original_path)
         if not compressed_path:
             await status.edit_text("❌ فشرده‌سازی انجام نشد. احتمالاً فایل پشتیبانی نمی‌شود.")
             return
 
-        before_mb = original_path.stat().st_size / (1024 * 1024)
+        if original_path and original_path.exists():
+            before_mb = original_path.stat().st_size / (1024 * 1024)
+        else:
+            before_mb = compressed_path.stat().st_size / (1024 * 1024)
+
         after_mb = compressed_path.stat().st_size / (1024 * 1024)
+
+        # Save compressed output in TTL cache
+        cached_saved = file_cache_service.put(cache_key, compressed_path)
+        if cached_saved:
+            compressed_path = Path(cached_saved)
 
         await status.edit_text(
             f"✅ فشرده‌سازی کامل شد\n"
@@ -89,7 +105,7 @@ async def _compress_and_send(message: Message, bot: Bot, file_id: str, name_hint
         try:
             if original_path and original_path.exists():
                 original_path.unlink(missing_ok=True)
-            if compressed_path and compressed_path.exists():
+            if compressed_path and compressed_path.exists() and not file_cache_service.is_cache_file(compressed_path):
                 compressed_path.unlink(missing_ok=True)
         except Exception:
             pass

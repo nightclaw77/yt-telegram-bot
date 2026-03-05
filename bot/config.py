@@ -31,6 +31,10 @@ class Config:
     BALE_BOT_TOKEN: str = os.getenv("BALE_BOT_TOKEN", "")
     BALE_CHAT_ID: str = os.getenv("BALE_CHAT_ID", "")
     BALE_FORWARD_ENABLED: bool = os.getenv("BALE_FORWARD_ENABLED", "false").lower() == "true"
+
+    # File cache (reuse recent outputs)
+    FILE_CACHE_ENABLED: bool = os.getenv("FILE_CACHE_ENABLED", "true").lower() == "true"
+    FILE_CACHE_TTL_SECONDS: int = int(os.getenv("FILE_CACHE_TTL_SECONDS", "3600"))
     
     @classmethod
     def load(cls):

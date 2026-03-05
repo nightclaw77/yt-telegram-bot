@@ -9,6 +9,7 @@ A powerful Telegram bot for downloading, searching, and summarizing YouTube cont
 - 📝 **AI Summarizer:** Generate structured summaries of long videos using AI.
 - 🗜️ **Telegram Video Compressor:** Send any Telegram video/video-document and get a smaller compressed file back.
 - 🌉 **Telegram → Bale Bridge (Optional):** Automatically mirrors downloaded/compressed media to a Bale chat.
+- ♻️ **Short-lived cache (Optional):** Reuse recent download/compression outputs for 30-60 minutes to skip reprocessing.
 - 🔍 **YouTube Search:** Search for videos directly from Telegram using `/search`.
 - 🏢 **Channel Overview:** Send a channel link to see:
   - 🆕 Latest 3 uploads
@@ -60,6 +61,8 @@ A powerful Telegram bot for downloading, searching, and summarizing YouTube cont
    BALE_FORWARD_ENABLED=true
    BALE_BOT_TOKEN=your_bale_bot_token
    BALE_CHAT_ID=your_bale_chat_id
+   FILE_CACHE_ENABLED=true
+   FILE_CACHE_TTL_SECONDS=3600
    ```
 
 6. **Run the bot:**
