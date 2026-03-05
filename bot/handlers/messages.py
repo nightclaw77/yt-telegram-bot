@@ -138,8 +138,6 @@ async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: st
 @router.message(F.video)
 async def handle_uploaded_video(message: Message, bot: Bot):
     """Compress Telegram-uploaded video files or collect in batch mode."""
-    if not _group_triggered(message):
-        return
     user_id = message.from_user.id
     if _is_batch_on(user_id):
         await batch_add(user_id, message.video.file_id, message.video.file_name or f"video_{message.message_id}.mp4", message.video.file_size)
@@ -153,8 +151,6 @@ async def handle_uploaded_video(message: Message, bot: Bot):
 @router.message(F.photo)
 async def handle_uploaded_photo(message: Message, bot: Bot):
     """Collect/forward photos to Bale with caption support."""
-    if not _group_triggered(message):
-        return
     user_id = message.from_user.id
     largest = message.photo[-1]
     name = f"photo_{message.message_id}.jpg"
@@ -172,8 +168,6 @@ async def handle_uploaded_photo(message: Message, bot: Bot):
 @router.message(F.document)
 async def handle_uploaded_video_document(message: Message, bot: Bot):
     """Handle uploaded documents: batch collect or video-compress path."""
-    if not _group_triggered(message):
-        return
     user_id = message.from_user.id
     mime = (message.document.mime_type or "").lower()
 
@@ -291,8 +285,6 @@ async def _compress_and_send(message: Message, bot: Bot, file_id: str, name_hint
 @router.message(F.audio)
 async def handle_uploaded_audio(message: Message, bot: Bot):
     """Collect uploaded audio in batch mode or forward to Bale."""
-    if not _group_triggered(message):
-        return
     user_id = message.from_user.id
     if _is_batch_on(user_id):
         await batch_add(user_id, message.audio.file_id, message.audio.file_name or f"audio_{message.message_id}.mp3", message.audio.file_size)
