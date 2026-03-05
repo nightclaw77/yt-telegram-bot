@@ -113,6 +113,7 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
 
     if action == "dl_video":
         quality = parts[2] if len(parts) > 2 else "best"
+        compress = parts[3] if len(parts) > 3 else "0"
         
         # Map shorthand quality to yt-dlp format
         format_map = {
@@ -129,13 +130,14 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
             chat_id=callback.from_user.id,
             text="⏳ Starting download..."
         )
-        await handle_video_download_inline(callback, url, format_id, bot)
+        await handle_video_download_inline(callback, url, format_id, compress == "1", bot)
     elif action == "dl_audio":
+        compress = parts[3] if len(parts) > 3 else "0"
         await bot.send_message(
             chat_id=callback.from_user.id,
             text="⏳ Extracting audio..."
         )
-        await handle_audio_download_inline(callback, url, bot)
+        await handle_audio_download_inline(callback, url, compress == "1", bot)
     elif action == "summary":
         await bot.send_message(
             chat_id=callback.from_user.id,
@@ -385,7 +387,7 @@ async def upload_with_retry(bot: Bot, message, media_type: str, path: str, max_r
 
 # --- Inline mode handlers (send to user's DM) ---
 
-async def handle_video_download_inline(callback: CallbackQuery, url: str, format_id: str, bot: Bot):
+async def handle_video_download_inline(callback: CallbackQuery, url: str, format_id: str, compress: bool, bot: Bot):
     """Handle video download for inline mode - sends to user's DM."""
     user_id = callback.from_user.id
     
@@ -448,6 +450,46 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
     chat_id = user_id
     
     if path:
+        final_path = path
+        
+        # Compress if requested
+        if compress:
+            try:
+                await bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=status_msg.message_id,
+                    text=f"🎬 <b>{title}</b>\n\n"
+                         f"🗜 Status: <b>Compressing...</b>\n"
+                         f"⏳ Please wait..."
+                )
+            except:
+                pass
+            
+            from bot.services.compressor import CompressionService
+            from pathlib import Path
+            compressor = CompressionService()
+            compressed_path = await compressor.compress_video(Path(path))
+            
+            if compressed_path:
+                import os
+                original_mb = os.path.getsize(path) / (1024 * 1024)
+                compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
+                
+                # Remove original, use compressed
+                os.remove(path)
+                final_path = str(compressed_path)
+                
+                try:
+                    await bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=status_msg.message_id,
+                        text=f"🎬 <b>{title}</b>\n\n"
+                             f"✅ Compressed: {original_mb:.1f}MB → {compressed_mb:.1f}MB\n"
+                             f"📤 Uploading..."
+                    )
+                except:
+                    pass
+        
         # Update to uploading status
         try:
             await bot.edit_message_text(
@@ -460,7 +502,7 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
         except:
             pass
         
-        success = await upload_with_retry(bot, status_msg, "video", path)
+        success = await upload_with_retry(bot, status_msg, "video", final_path)
         
         if success:
             from bot.database.models import Database
@@ -501,7 +543,7 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
         pass
 
 
-async def handle_audio_download_inline(callback: CallbackQuery, url: str, bot: Bot):
+async def handle_audio_download_inline(callback: CallbackQuery, url: str, compress: bool, bot: Bot):
     """Handle audio download for inline mode."""
     user_id = callback.from_user.id
     status_msg = await bot.send_message(user_id, "⏳ Downloading audio...")
@@ -528,9 +570,74 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, bot: B
     path = await download_manager.wait_for_download(task_id)
     
     if path:
-        success = await upload_with_retry(bot, status_msg, "audio", path)
+        from pathlib import Path
+        final_path = path
         
-        if success:
+        # Compress if requested
+        if compress:
+            try:
+                await bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=status_msg.message_id,
+                    text=f"🎵 <b>Compressing audio...</b>\n⏳ Please wait..."
+                )
+            except:
+                pass
+            
+            from bot.services.audio_compressor import AudioCompressionService
+            audio_compressor = AudioCompressionService()
+            compressed_path = await audio_compressor.compress_audio(Path(path), target_bitrate_k=64)
+            
+            if compressed_path:
+                import os
+                original_mb = os.path.getsize(path) / (1024 * 1024)
+                compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
+                
+                os.remove(path)
+                final_path = str(compressed_path)
+                
+                try:
+                    await bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=status_msg.message_id,
+                        text=f"🎵 <b>Compressed</b>\n"
+                             f"{original_mb:.1f}MB → {compressed_mb:.1f}MB\n"
+                             f"📤 Uploading..."
+                    )
+                except:
+                    pass
+        
+        # Get audio metadata before upload
+        from bot.services.audio_compressor import AudioCompressionService
+        audio_comp = AudioCompressionService()
+        metadata = await audio_comp.get_audio_metadata(Path(final_path))
+        
+        duration_sec = metadata.get("duration", 0)
+        size_mb = metadata.get("size_mb", 0)
+        
+        # Upload with metadata caption
+        try:
+            caption = f"🎵 Audio\n"
+            if duration_sec > 0:
+                mins = duration_sec // 60
+                secs = duration_sec % 60
+                caption += f"⏱ {mins}:{secs:02d}\n"
+            caption += f"💾 {size_mb:.1f} MB"
+            if compress:
+                caption += " (Compressed)"
+            
+            await bot.send_audio(
+                chat_id=user_id,
+                audio=FSInputFile(final_path),
+                caption=caption,
+                duration=duration_sec if duration_sec > 0 else None
+            )
+            
+            import os
+            if os.path.exists(final_path):
+                os.remove(final_path)
+            
+            # Save to history
             from bot.database.models import Database
             db = Database()
             await db.init()
@@ -540,10 +647,11 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, bot: B
                 url=url,
                 title=info.get("title", "Unknown") if info else "Audio",
                 status="completed",
-                file_path=path
+                file_path=final_path
             )
-        else:
-            await bot.send_message(user_id, "❌ Upload failed. File retained.")
+        except Exception as e:
+            logger.error(f"Audio upload error: {e}")
+            await bot.send_message(user_id, f"❌ Upload failed: {e}")
             return
     else:
         await bot.send_message(user_id, "❌ Audio extraction failed.")

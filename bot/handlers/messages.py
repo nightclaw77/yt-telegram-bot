@@ -164,10 +164,21 @@ async def show_video_options(message: Message, url: str, bot: Bot):
     
     keyboard = [
         [
-            InlineKeyboardButton(text="🎬 Video (Best)", callback_data=shorten_callback("dl_video", url, "best")),
-            InlineKeyboardButton(text="🎬 720p", callback_data=shorten_callback("dl_video", url, "720"))
+            InlineKeyboardButton(text="🎬 Best", callback_data=shorten_callback("dl_video", url, "best", "0")),
+            InlineKeyboardButton(text="🗜 Best (Compressed)", callback_data=shorten_callback("dl_video", url, "best", "1"))
         ],
-        [InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=shorten_callback("dl_audio", url, "best"))],
+        [
+            InlineKeyboardButton(text="🎬 720p", callback_data=shorten_callback("dl_video", url, "720", "0")),
+            InlineKeyboardButton(text="🗜 720p (Compressed)", callback_data=shorten_callback("dl_video", url, "720", "1"))
+        ],
+        [
+            InlineKeyboardButton(text="🎬 480p", callback_data=shorten_callback("dl_video", url, "480", "0")),
+            InlineKeyboardButton(text="🗜 480p (Compressed)", callback_data=shorten_callback("dl_video", url, "480", "1"))
+        ],
+        [
+            InlineKeyboardButton(text="🎵 Audio", callback_data=shorten_callback("dl_audio", url, "best", "0")),
+            InlineKeyboardButton(text="🗜 Audio (Compressed)", callback_data=shorten_callback("dl_audio", url, "best", "1"))
+        ],
         [InlineKeyboardButton(text="📝 AI Summary", callback_data=shorten_callback("summary", url, "xl"))]
     ]
     
