@@ -27,7 +27,7 @@ rate_limiter = RateLimiter(config.RATE_LIMIT_PER_MINUTE)
 # in-memory batch state per user
 BATCH_STATE: dict[int, dict] = {}
 SMART_FORWARD: Dict[int, Dict[str, Any]] = {}
-SMART_FORWARD_DEBOUNCE_SEC = 5
+SMART_FORWARD_DEBOUNCE_SEC = 1
 
 
 def _is_batch_on(user_id: int) -> bool:
@@ -112,6 +112,16 @@ async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: st
         return
 
     user_id = message.from_user.id
+
+    # Single file: send immediately (no waiting)
+    if not message.media_group_id:
+        ok = await bale_bridge_service.forward_file(tmp, media_type, caption=message.caption)
+        await message.answer("✅ فایل به بله ارسال شد." if ok else "⚠️ ارسال به بله ناموفق بود.")
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        return
+
+    # Album/media-group: debounce and pack as smart-batch
     state = SMART_FORWARD.setdefault(user_id, {"items": [], "task": None, "bot": bot, "chat_id": message.chat.id})
     state["items"].append({"path": str(tmp), "media_type": media_type, "caption": message.caption})
     state["bot"] = bot
@@ -122,7 +132,7 @@ async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: st
         t.cancel()
     state["task"] = asyncio.create_task(_smart_forward_debounce(user_id))
 
-    await message.answer("📥 فایل دریافت شد. در حال تشخیص smart single/batch...")
+    await message.answer("📥 فایل آلبوم دریافت شد. در حال بسته‌بندی سریع...")
 
 
 @router.message(F.video)
