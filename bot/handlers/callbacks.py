@@ -233,13 +233,16 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
 
         user_id = callback.from_user.id
         status = await bot.send_message(user_id, f"📦 بررسی release برای <b>{full_name}</b> ...")
-        assets = await github_apps_service.latest_release_assets(full_name)
+        release = await github_apps_service.latest_release_assets(full_name)
+        assets = release.get("assets", [])
+        tag = release.get("tag", "")
         if not assets:
             await status.edit_text("❌ Latest release یا asset پیدا نشد.")
             return
 
         picks = github_apps_service.pick_target_assets(assets)
         sent = 0
+        await status.edit_text(f"📦 Release: <b>{tag or 'latest'}</b>\nدر حال دانلود assetها...")
         for label, asset in (("android_v8a", picks.get("android_v8a")), ("windows_x64", picks.get("windows_x64"))):
             if not asset:
                 continue
@@ -247,7 +250,8 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
             if not local:
                 continue
 
-            doc = await bot.send_document(user_id, FSInputFile(str(local)), caption=f"{full_name}\n{label}\n⭐ from GitHub release")
+            size_h = asset.get("size_h") or "?"
+            doc = await bot.send_document(user_id, FSInputFile(str(local)), caption=f"{full_name}\n{label} • {size_h}\n🏷 {tag or 'latest'}")
             try:
                 if getattr(doc, "document", None):
                     remember_local_media(user_id, doc.document.file_id, str(local))
