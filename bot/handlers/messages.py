@@ -10,6 +10,7 @@ from bot.services.youtube import YouTubeService
 from bot.services.compressor import CompressionService
 from bot.services.bale_bridge import bale_bridge_service
 from bot.services.file_cache import file_cache_service
+from bot.services.secure_package import create_secure_zip_many, DEFAULT_PASSWORD
 from bot.utils.rate_limiter import RateLimiter
 from bot.utils.validators import validate_youtube_url, is_channel_url
 from bot.utils.url_shortener import shorten_callback
@@ -20,17 +21,52 @@ youtube_service = YouTubeService()
 compressor_service = CompressionService()
 rate_limiter = RateLimiter(config.RATE_LIMIT_PER_MINUTE)
 
+# in-memory batch state per user
+BATCH_STATE: dict[int, dict] = {}
+
+
+def _is_batch_on(user_id: int) -> bool:
+    return bool(BATCH_STATE.get(user_id, {}).get("active"))
+
+
+async def batch_start(user_id: int):
+    BATCH_STATE[user_id] = {"active": True, "items": []}
+
+
+async def batch_clear(user_id: int):
+    BATCH_STATE[user_id] = {"active": False, "items": []}
+
+
+async def batch_add(user_id: int, file_id: str, name: str):
+    state = BATCH_STATE.setdefault(user_id, {"active": True, "items": []})
+    state["items"].append({"file_id": file_id, "name": name})
+
 
 @router.message(F.video)
 async def handle_uploaded_video(message: Message, bot: Bot):
-    """Compress Telegram-uploaded video files."""
+    """Compress Telegram-uploaded video files or collect in batch mode."""
+    user_id = message.from_user.id
+    if _is_batch_on(user_id):
+        await batch_add(user_id, message.video.file_id, message.video.file_name or f"video_{message.message_id}.mp4")
+        count = len(BATCH_STATE[user_id]["items"])
+        await message.answer(f"📦 به batch اضافه شد ({count} فایل).")
+        return
+
     await _compress_and_send(message, bot, file_id=message.video.file_id, name_hint=message.video.file_name)
 
 
 @router.message(F.document)
 async def handle_uploaded_video_document(message: Message, bot: Bot):
-    """Compress uploaded documents if they are video files."""
+    """Handle uploaded documents: batch collect or video-compress path."""
+    user_id = message.from_user.id
     mime = (message.document.mime_type or "").lower()
+
+    if _is_batch_on(user_id):
+        await batch_add(user_id, message.document.file_id, message.document.file_name or f"doc_{message.message_id}.bin")
+        count = len(BATCH_STATE[user_id]["items"])
+        await message.answer(f"📦 به batch اضافه شد ({count} فایل).")
+        return
+
     if not mime.startswith("video/"):
         return
     await _compress_and_send(message, bot, file_id=message.document.file_id, name_hint=message.document.file_name)
@@ -111,11 +147,76 @@ async def _compress_and_send(message: Message, bot: Bot, file_id: str, name_hint
             pass
 
 
+@router.message(F.audio)
+async def handle_uploaded_audio(message: Message, bot: Bot):
+    """Collect uploaded audio in batch mode."""
+    user_id = message.from_user.id
+    if _is_batch_on(user_id):
+        await batch_add(user_id, message.audio.file_id, message.audio.file_name or f"audio_{message.message_id}.mp3")
+        count = len(BATCH_STATE[user_id]["items"])
+        await message.answer(f"📦 به batch اضافه شد ({count} فایل).")
+
+
+async def send_batch_to_bale(message: Message, bot: Bot):
+    """Create encrypted zip from collected files and send to Bale."""
+    from bot.database.models import Database
+
+    user_id = message.from_user.id
+    state = BATCH_STATE.get(user_id, {"active": False, "items": []})
+    items = state.get("items", [])
+    if not items:
+        await message.answer("📭 batch خالی است.")
+        return
+
+    status = await message.answer(f"📦 در حال آماده‌سازی batch ({len(items)} فایل)...")
+    tmp_paths: list[Path] = []
+    try:
+        for idx, item in enumerate(items, start=1):
+            tg_file = await bot.get_file(item["file_id"])
+            safe_name = (item.get("name") or f"file_{idx}").replace("/", "_")
+            local = config.DOWNLOADS_DIR / f"batch_{user_id}_{message.message_id}_{idx}_{safe_name}"
+            await bot.download(tg_file, destination=local)
+            tmp_paths.append(local)
+
+        db = Database(); await db.init()
+        settings = await db.get_user_settings(user_id)
+        pwd = settings.get("bale_password") or DEFAULT_PASSWORD
+        comp = settings.get("compression_level", "medium")
+
+        zip_path = await create_secure_zip_many(tmp_paths, comp, pwd)
+        if not zip_path:
+            await status.edit_text("❌ ساخت ZIP ناموفق بود.")
+            return
+
+        bale_ok = await bale_bridge_service.forward_file(zip_path, "document", caption=f"Batch package ({len(items)} files)")
+        await status.edit_text("✅ batch به بله ارسال شد." if bale_ok else "⚠️ ارسال batch به بله ناموفق بود.")
+    except Exception as e:
+        logger.exception("Batch send failed")
+        await status.edit_text(f"❌ خطا در batch: {e}")
+    finally:
+        for p in tmp_paths:
+            if p.exists():
+                p.unlink(missing_ok=True)
+        await batch_clear(user_id)
+
+
 @router.message(F.text)
 async def handle_text_input(message: Message, bot: Bot):
     """Handle incoming text messages - process URLs."""
     text = message.text.strip()
-    
+
+    if text == "📦 Batch ON":
+        await batch_start(message.from_user.id)
+        await message.answer("📦 Batch mode فعال شد. فایل‌ها را بفرست، بعد روی «📤 Batch Send» بزن.")
+        return
+    if text == "🧹 Batch Clear":
+        await batch_clear(message.from_user.id)
+        await message.answer("🧹 Batch پاک شد و غیرفعال شد.")
+        return
+    if text == "📤 Batch Send":
+        await send_batch_to_bale(message, bot)
+        return
+
     # Check if it's a URL
     if not (text.startswith("http://") or text.startswith("https://")):
         return  # Not a URL, ignore

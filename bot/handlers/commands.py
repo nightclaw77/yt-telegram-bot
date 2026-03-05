@@ -21,6 +21,8 @@ def _main_menu_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="⚙️ Settings"), KeyboardButton(text="📡 Bridge Status")],
             [KeyboardButton(text="🆘 SOS ON"), KeyboardButton(text="✅ SOS OFF")],
+            [KeyboardButton(text="📦 Batch ON"), KeyboardButton(text="📤 Batch Send")],
+            [KeyboardButton(text="🧹 Batch Clear")],
         ],
         resize_keyboard=True,
         selective=True,
@@ -60,7 +62,8 @@ async def cmd_start(message: Message, command: CommandObject):
         "• Use <code>/cancel</code> to cancel ongoing downloads.\n"
         "• Use <code>/history</code> to see download history.\n"
         "• Use <code>/settings</code> for Bale mode/encryption/compression.\n"
-        "• Use <code>/bridge_status</code> for current bridge/sos status.\n\n"
+        "• Use <code>/bridge_status</code> for current bridge/sos status.\n"
+        "• Batch mode: use buttons 📦 Batch ON / 📤 Batch Send.\n\n"
         "✨ <b>Inline Mode:</b> Type <code>@Night77_tube_bot query</code> in any chat to search!",
         reply_markup=_main_menu_keyboard()
     )
