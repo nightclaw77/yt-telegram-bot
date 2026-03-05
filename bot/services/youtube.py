@@ -86,7 +86,7 @@ class YouTubeService:
     
     async def search(self, query: str, limit: int = 5) -> List[Dict]:
         """Search YouTube for videos."""
-        cmd = ["yt-dlp", f"ytsearch{limit}:{query}", "--dump-json", "--flat-playlist"]
+        cmd = ["yt-dlp", f"ytsearch{limit}:{query}", "--dump-json"]
         results = []
         
         try:
@@ -101,6 +101,11 @@ class YouTubeService:
                 if not line.strip():
                     continue
                 data = json.loads(line)
+                
+                # Skip non-video entries (channels, playlists, etc.)
+                if data.get("_type") != "url" or data.get("ie_key") != "Youtube":
+                    continue
+                
                 # Get thumbnail - prefer default or medium quality
                 thumbnails = data.get("thumbnails", [])
                 thumbnail_url = None

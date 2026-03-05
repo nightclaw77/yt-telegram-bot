@@ -189,10 +189,12 @@ async def show_video_options(message: Message, url: str, bot: Bot):
     
     duration = info.get("duration", 0)
     duration_str = f"{duration//60}:{duration%60:02d}" if duration else "N/A"
+    upload_date = info.get("upload_date", "")
+    date_str = f" • {upload_date}" if upload_date else ""
     
     await message.answer(
         f"🎬 <b>{info['title']}</b>\n"
-        f"👤 {info['uploader']}\n"
+        f"👤 {info['uploader']}{date_str}\n"
         f"⏱️ {duration_str}\n\n"
         f"Choose an action:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)

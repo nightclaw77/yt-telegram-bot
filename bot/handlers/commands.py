@@ -96,7 +96,9 @@ async def cmd_search(message: Message, command: CommandObject, bot: Bot):
     text = f"🔍 <b>Search results for:</b> {command.args}\n\n"
     keyboard = []
     for i, res in enumerate(results, 1):
-        text += f"{i}. {res['title']}\n"
+        upload_date = res.get('upload_date', '')
+        date_str = f" • {upload_date}" if upload_date else ""
+        text += f"{i}. {res['title']}{date_str}\n"
         keyboard.append([InlineKeyboardButton(text=f"🎥 Select #{i}", callback_data=shorten_callback("info", res['url']))])
     
     await msg.delete()
