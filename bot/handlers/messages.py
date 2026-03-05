@@ -99,16 +99,18 @@ async def _smart_forward_debounce(user_id: int):
 
 async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: str, filename: str, media_type: str):
     """Smart forwarding: auto-detect single vs multi uploads and choose direct vs zip."""
+    progress = await message.answer("⏳ در حال دریافت فایل از تلگرام...")
     tmp = config.DOWNLOADS_DIR / f"fwd_{message.from_user.id}_{message.message_id}_{filename.replace('/', '_')}"
     try:
-        tg_file = await bot.get_file(file_id)
+        tg_file = await bot.get_file(file_id, request_timeout=30)
         await bot.download(tg_file, destination=tmp)
+        await progress.edit_text("📥 فایل دریافت شد. در حال ارسال...")
     except Exception as e:
         err = str(e)
         if "file is too big" in err.lower():
-            await message.answer("⚠️ این فایل برای دریافت مستقیم از Telegram Bot API بزرگ است.\nلطفاً لینک مستقیم فایل را بفرست تا دانلود و به بله ارسال شود.")
+            await progress.edit_text("⚠️ این فایل برای دریافت مستقیم از Telegram Bot API بزرگ است.\nلطفاً لینک مستقیم فایل را بفرست تا دانلود و به بله ارسال شود.")
         else:
-            await message.answer(f"⚠️ خطا در دریافت فایل از تلگرام: {e}")
+            await progress.edit_text(f"⚠️ خطا در دریافت فایل از تلگرام: {e}")
         return
 
     user_id = message.from_user.id
@@ -116,7 +118,7 @@ async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: st
     # Single file: send immediately (no waiting)
     if not message.media_group_id:
         ok = await bale_bridge_service.forward_file(tmp, media_type, caption=message.caption)
-        await message.answer("✅ فایل به بله ارسال شد." if ok else "⚠️ ارسال به بله ناموفق بود.")
+        await progress.edit_text("✅ فایل به بله ارسال شد." if ok else "⚠️ ارسال به بله ناموفق بود.")
         if tmp.exists():
             tmp.unlink(missing_ok=True)
         return
@@ -132,7 +134,7 @@ async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: st
         t.cancel()
     state["task"] = asyncio.create_task(_smart_forward_debounce(user_id))
 
-    await message.answer("📥 فایل آلبوم دریافت شد. در حال بسته‌بندی سریع...")
+    await progress.edit_text("📥 فایل آلبوم دریافت شد. در حال بسته‌بندی سریع...")
 
 
 @router.message(F.video)
