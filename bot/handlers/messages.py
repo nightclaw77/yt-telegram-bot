@@ -418,17 +418,30 @@ async def handle_text_input(message: Message, bot: Bot):
             await status.edit_text("❌ دانلود لینک مستقیم ناموفق بود.")
             return
 
-        sent = await message.answer_document(FSInputFile(str(local)), caption="Direct link download")
+        tg_ok = False
         try:
-            if getattr(sent, "document", None):
-                remember_local_media(message.from_user.id, sent.document.file_id, str(local))
-        except Exception:
-            pass
+            sent = await message.answer_document(FSInputFile(str(local)), caption="Direct link download")
+            tg_ok = True
+            try:
+                if getattr(sent, "document", None):
+                    remember_local_media(message.from_user.id, sent.document.file_id, str(local))
+            except Exception:
+                pass
+        except Exception as e:
+            await message.answer(f"⚠️ ارسال به تلگرام ناموفق بود: {e}")
 
+        bale_ok = False
         if bale_bridge_service.enabled:
-            ok = await bale_bridge_service.forward_file(local, "document", caption=message.caption)
-            await message.answer("✅ به بله فوروارد شد." if ok else "⚠️ فوروارد به بله ناموفق بود.")
-        await status.delete()
+            bale_ok = await bale_bridge_service.forward_file(local, "document", caption=message.caption)
+            await message.answer("✅ به بله فوروارد شد." if bale_ok else "⚠️ فوروارد به بله ناموفق بود.")
+
+        size_mb = local.stat().st_size / (1024 * 1024)
+        await status.edit_text(
+            f"📦 Large-file mode\n"
+            f"Size: {size_mb:.1f}MB\n"
+            f"Telegram: {'✅' if tg_ok else '❌'}\n"
+            f"Bale: {'✅' if bale_ok else '❌'}"
+        )
         return
 
     # Check if it's a channel URL

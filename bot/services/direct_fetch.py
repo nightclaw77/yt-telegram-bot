@@ -9,7 +9,7 @@ from bot.config import config
 
 
 class DirectFetchService:
-    async def download(self, url: str, prefix: str = "direct") -> Path | None:
+    async def download(self, url: str, prefix: str = "direct", max_mb: int | None = None) -> Path | None:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"}:
             return None
@@ -17,13 +17,21 @@ class DirectFetchService:
         name = Path(parsed.path).name or "file.bin"
         out = config.DOWNLOADS_DIR / f"{prefix}_{name}"
 
-        timeout = aiohttp.ClientTimeout(total=300)
+        limit_bytes = (max_mb or config.DIRECT_MAX_MB) * 1024 * 1024
+
+        timeout = aiohttp.ClientTimeout(total=1800)
         async with aiohttp.ClientSession(timeout=timeout) as s:
             async with s.get(url, allow_redirects=True) as r:
                 if r.status != 200:
                     return None
+                total = 0
                 with out.open("wb") as f:
                     async for chunk in r.content.iter_chunked(256 * 1024):
+                        total += len(chunk)
+                        if total > limit_bytes:
+                            f.close()
+                            out.unlink(missing_ok=True)
+                            return None
                         f.write(chunk)
         return out if out.exists() and out.stat().st_size > 0 else None
 

@@ -40,6 +40,9 @@ class Config:
 
     # Bale safe upload tuning
     BALE_SAFE_MAX_MB: int = int(os.getenv("BALE_SAFE_MAX_MB", "20"))
+
+    # Large direct file mode
+    DIRECT_MAX_MB: int = int(os.getenv("DIRECT_MAX_MB", "500"))
     
     @classmethod
     def load(cls):
