@@ -8,6 +8,7 @@ from aiogram.types import Message, FSInputFile
 from bot.config import config
 from bot.services.youtube import YouTubeService
 from bot.services.compressor import CompressionService
+from bot.services.bale_bridge import bale_bridge_service
 from bot.utils.rate_limiter import RateLimiter
 from bot.utils.validators import validate_youtube_url, is_channel_url
 from bot.utils.url_shortener import shorten_callback
@@ -72,6 +73,14 @@ async def _compress_and_send(message: Message, bot: Bot, file_id: str, name_hint
             FSInputFile(str(compressed_path)),
             caption=f"🗜 Compressed\n{before_mb:.1f}MB → {after_mb:.1f}MB"
         )
+
+        if bale_bridge_service.enabled:
+            bale_ok = await bale_bridge_service.forward_file(
+                compressed_path,
+                "video",
+                caption=f"Compressed mirror {before_mb:.1f}MB -> {after_mb:.1f}MB"
+            )
+            await message.answer("✅ نسخه بله هم ارسال شد." if bale_ok else "⚠️ ارسال نسخه بله ناموفق بود.")
 
     except Exception as e:
         logger.exception("Telegram video compression failed")

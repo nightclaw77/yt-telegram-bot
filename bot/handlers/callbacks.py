@@ -8,6 +8,7 @@ from bot.config import config
 from bot.services.youtube import YouTubeService
 from bot.services.downloader import DownloadManager
 from bot.services.summarizer import SummarizerService
+from bot.services.bale_bridge import bale_bridge_service
 from bot.utils.url_shortener import reconstruct_url, shorten_callback
 
 logger = logging.getLogger(__name__)
@@ -358,21 +359,28 @@ async def handle_live_capture(callback: CallbackQuery, url: str, bot: Bot):
 
 
 async def upload_with_retry(bot: Bot, message, media_type: str, path: str, max_retries: int = 3):
-    """Upload file with retry logic."""
+    """Upload file to Telegram with retry, then optionally forward to Bale."""
     import os
-    
+
     for attempt in range(max_retries):
         try:
             if media_type == "video":
                 await message.answer_video(FSInputFile(path))
             elif media_type == "audio":
                 await message.answer_audio(FSInputFile(path))
-            
-            # Only remove file after successful upload
+
+            # Forward to Bale (optional, non-blocking failure)
+            bale_media_type = media_type if media_type in {"video", "audio"} else "document"
+            bale_ok = await bale_bridge_service.forward_file(path, bale_media_type, caption="Forwarded from Night YouTube Bot")
+            if bale_bridge_service.enabled:
+                notice = "✅ فایل به بله هم ارسال شد." if bale_ok else "⚠️ ارسال به بله ناموفق بود (تلگرام انجام شد)."
+                await message.answer(notice)
+
+            # Only remove file after Telegram upload completes
             if os.path.exists(path):
                 os.remove(path)
             return True
-            
+
         except Exception as e:
             logger.warning(f"Upload attempt {attempt + 1} failed: {e}")
             if attempt < max_retries - 1:
@@ -381,7 +389,7 @@ async def upload_with_retry(bot: Bot, message, media_type: str, path: str, max_r
             else:
                 logger.error(f"Upload failed after {max_retries} attempts: {e}")
                 return False
-    
+
     return False
 
 

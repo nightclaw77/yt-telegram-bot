@@ -8,6 +8,7 @@ A powerful Telegram bot for downloading, searching, and summarizing YouTube cont
 - 🎵 **Audio Extractor:** Extract high-quality MP3 from any video.
 - 📝 **AI Summarizer:** Generate structured summaries of long videos using AI.
 - 🗜️ **Telegram Video Compressor:** Send any Telegram video/video-document and get a smaller compressed file back.
+- 🌉 **Telegram → Bale Bridge (Optional):** Automatically mirrors downloaded/compressed media to a Bale chat.
 - 🔍 **YouTube Search:** Search for videos directly from Telegram using `/search`.
 - 🏢 **Channel Overview:** Send a channel link to see:
   - 🆕 Latest 3 uploads
@@ -54,7 +55,14 @@ A powerful Telegram bot for downloading, searching, and summarizing YouTube cont
    ALLOWED_USER_IDS=971043547
    ```
 
-5. **Run the bot:**
+5. **(Optional) Enable Bale mirroring:**
+   ```env
+   BALE_FORWARD_ENABLED=true
+   BALE_BOT_TOKEN=your_bale_bot_token
+   BALE_CHAT_ID=your_bale_chat_id
+   ```
+
+6. **Run the bot:**
    ```bash
    python3 main.py
    ```

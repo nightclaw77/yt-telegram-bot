@@ -26,6 +26,11 @@ class Config:
     
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///bot.db")
+
+    # Bale Bridge (optional)
+    BALE_BOT_TOKEN: str = os.getenv("BALE_BOT_TOKEN", "")
+    BALE_CHAT_ID: str = os.getenv("BALE_CHAT_ID", "")
+    BALE_FORWARD_ENABLED: bool = os.getenv("BALE_FORWARD_ENABLED", "false").lower() == "true"
     
     @classmethod
     def load(cls):
