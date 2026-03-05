@@ -43,6 +43,18 @@ async def batch_add(user_id: int, file_id: str, name: str, size: int | None = No
     state["items"].append({"file_id": file_id, "name": name, "size": size or 0})
 
 
+async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: str, filename: str, media_type: str):
+    tmp = config.DOWNLOADS_DIR / f"fwd_{message.from_user.id}_{message.message_id}_{filename.replace('/', '_')}"
+    tg_file = await bot.get_file(file_id)
+    await bot.download(tg_file, destination=tmp)
+    try:
+        ok = await bale_bridge_service.forward_file(tmp, media_type, caption=message.caption)
+        await message.answer("✅ به بله فوروارد شد." if ok else "⚠️ فوروارد به بله ناموفق بود.")
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
 @router.message(F.video)
 async def handle_uploaded_video(message: Message, bot: Bot):
     """Compress Telegram-uploaded video files or collect in batch mode."""
@@ -54,6 +66,23 @@ async def handle_uploaded_video(message: Message, bot: Bot):
         return
 
     await _compress_and_send(message, bot, file_id=message.video.file_id, name_hint=message.video.file_name)
+
+
+@router.message(F.photo)
+async def handle_uploaded_photo(message: Message, bot: Bot):
+    """Collect/forward photos to Bale with caption support."""
+    user_id = message.from_user.id
+    largest = message.photo[-1]
+    name = f"photo_{message.message_id}.jpg"
+
+    if _is_batch_on(user_id):
+        await batch_add(user_id, largest.file_id, name, largest.file_size)
+        count = len(BATCH_STATE[user_id]["items"])
+        await message.answer(f"📦 عکس به batch اضافه شد ({count} فایل).")
+        return
+
+    if bale_bridge_service.enabled:
+        await _forward_incoming_file_to_bale(message, bot, largest.file_id, name, "photo")
 
 
 @router.message(F.document)
@@ -69,6 +98,14 @@ async def handle_uploaded_video_document(message: Message, bot: Bot):
         return
 
     if not mime.startswith("video/"):
+        if bale_bridge_service.enabled:
+            await _forward_incoming_file_to_bale(
+                message,
+                bot,
+                message.document.file_id,
+                message.document.file_name or f"doc_{message.message_id}.bin",
+                "document",
+            )
         return
     await _compress_and_send(message, bot, file_id=message.document.file_id, name_hint=message.document.file_name)
 
@@ -155,12 +192,22 @@ async def _compress_and_send(message: Message, bot: Bot, file_id: str, name_hint
 
 @router.message(F.audio)
 async def handle_uploaded_audio(message: Message, bot: Bot):
-    """Collect uploaded audio in batch mode."""
+    """Collect uploaded audio in batch mode or forward to Bale."""
     user_id = message.from_user.id
     if _is_batch_on(user_id):
         await batch_add(user_id, message.audio.file_id, message.audio.file_name or f"audio_{message.message_id}.mp3", message.audio.file_size)
         count = len(BATCH_STATE[user_id]["items"])
         await message.answer(f"📦 به batch اضافه شد ({count} فایل).")
+        return
+
+    if bale_bridge_service.enabled:
+        await _forward_incoming_file_to_bale(
+            message,
+            bot,
+            message.audio.file_id,
+            message.audio.file_name or f"audio_{message.message_id}.mp3",
+            "audio",
+        )
 
 
 async def send_batch_to_bale(message: Message, bot: Bot):
@@ -255,6 +302,10 @@ async def handle_text_input(message: Message, bot: Bot):
 
     # Check if it's a URL
     if not (text.startswith("http://") or text.startswith("https://")):
+        if bale_bridge_service.enabled and not text.startswith("/"):
+            ok = await bale_bridge_service.forward_text(text)
+            if ok:
+                await message.answer("✅ متن به بله فوروارد شد.")
         return  # Not a URL, ignore
     
     # Check rate limit

@@ -34,6 +34,7 @@ class BaleBridgeService:
             "video": ("sendVideo", "video"),
             "audio": ("sendAudio", "audio"),
             "document": ("sendDocument", "document"),
+            "photo": ("sendPhoto", "photo"),
         }
         method, media_field = method_map.get(media_type, ("sendDocument", "document"))
 
@@ -95,6 +96,25 @@ class BaleBridgeService:
                 return False
         except Exception:
             logger.exception("Bale forward failed")
+            return False
+
+
+    async def forward_text(self, text: str) -> bool:
+        if not self.enabled:
+            return False
+        endpoint = f"https://tapi.bale.ai/bot{self.token}/sendMessage"
+        payload = {"chat_id": str(self.chat_id), "text": text[:3800]}
+        try:
+            timeout = aiohttp.ClientTimeout(total=60)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(endpoint, json=payload) as resp:
+                    data = await resp.json(content_type=None)
+                    ok = bool(data.get("ok"))
+                    if not ok:
+                        logger.error("Bale sendMessage error: %s", data)
+                    return ok
+        except Exception:
+            logger.exception("Bale text forward failed")
             return False
 
 
