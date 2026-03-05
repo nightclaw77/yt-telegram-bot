@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from pathlib import Path
+from typing import Dict, Any
 from aiogram import Router, Bot, F
 from aiogram.types import Message, FSInputFile
 
@@ -24,6 +25,8 @@ rate_limiter = RateLimiter(config.RATE_LIMIT_PER_MINUTE)
 
 # in-memory batch state per user
 BATCH_STATE: dict[int, dict] = {}
+SMART_FORWARD: Dict[int, Dict[str, Any]] = {}
+SMART_FORWARD_DEBOUNCE_SEC = 5
 
 
 def _is_batch_on(user_id: int) -> bool:
@@ -43,16 +46,74 @@ async def batch_add(user_id: int, file_id: str, name: str, size: int | None = No
     state["items"].append({"file_id": file_id, "name": name, "size": size or 0})
 
 
+async def _smart_forward_flush(user_id: int):
+    state = SMART_FORWARD.pop(user_id, None)
+    if not state:
+        return
+
+    bot: Bot = state["bot"]
+    chat_id: int = state["chat_id"]
+    items = state.get("items", [])
+    if not items:
+        return
+
+    from bot.database.models import Database
+    db = Database(); await db.init()
+    settings = await db.get_user_settings(user_id)
+
+    try:
+        if len(items) == 1:
+            it = items[0]
+            ok = await bale_bridge_service.forward_file(it["path"], it["media_type"], caption=it.get("caption"))
+            await bot.send_message(chat_id, "✅ فوروارد تک‌فایل به بله انجام شد." if ok else "⚠️ فوروارد به بله ناموفق بود.")
+        else:
+            paths = [Path(i["path"]) for i in items if Path(i["path"]).exists()]
+            if not paths:
+                await bot.send_message(chat_id, "❌ فایل معتبری برای smart-batch پیدا نشد.")
+                return
+            pwd = settings.get("bale_password") or DEFAULT_PASSWORD
+            comp = settings.get("compression_level", "medium")
+            zip_path = await create_secure_zip_many(paths, comp, pwd)
+            if not zip_path:
+                await bot.send_message(chat_id, "❌ ساخت ZIP برای smart-batch ناموفق بود.")
+                return
+            ok = await bale_bridge_service.forward_file(zip_path, "document", caption=f"Smart batch ({len(paths)} files)")
+            await bot.send_message(chat_id, "✅ smart-batch به بله ارسال شد." if ok else "⚠️ ارسال smart-batch به بله ناموفق بود.")
+            if zip_path.exists():
+                zip_path.unlink(missing_ok=True)
+    finally:
+        for it in items:
+            p = Path(it["path"])
+            if p.exists():
+                p.unlink(missing_ok=True)
+
+
+async def _smart_forward_debounce(user_id: int):
+    try:
+        await asyncio.sleep(SMART_FORWARD_DEBOUNCE_SEC)
+        await _smart_forward_flush(user_id)
+    except asyncio.CancelledError:
+        return
+
+
 async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: str, filename: str, media_type: str):
+    """Smart forwarding: auto-detect single vs multi uploads and choose direct vs zip."""
     tmp = config.DOWNLOADS_DIR / f"fwd_{message.from_user.id}_{message.message_id}_{filename.replace('/', '_')}"
     tg_file = await bot.get_file(file_id)
     await bot.download(tg_file, destination=tmp)
-    try:
-        ok = await bale_bridge_service.forward_file(tmp, media_type, caption=message.caption)
-        await message.answer("✅ به بله فوروارد شد." if ok else "⚠️ فوروارد به بله ناموفق بود.")
-    finally:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
+
+    user_id = message.from_user.id
+    state = SMART_FORWARD.setdefault(user_id, {"items": [], "task": None, "bot": bot, "chat_id": message.chat.id})
+    state["items"].append({"path": str(tmp), "media_type": media_type, "caption": message.caption})
+    state["bot"] = bot
+    state["chat_id"] = message.chat.id
+
+    t = state.get("task")
+    if t and not t.done():
+        t.cancel()
+    state["task"] = asyncio.create_task(_smart_forward_debounce(user_id))
+
+    await message.answer("📥 فایل دریافت شد. در حال تشخیص smart single/batch...")
 
 
 @router.message(F.video)
