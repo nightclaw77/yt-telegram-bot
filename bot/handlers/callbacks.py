@@ -66,6 +66,8 @@ async def _show_settings(callback: CallbackQuery, user_id: int):
 async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_type: str, force_send: bool = False):
     settings = await _get_user_settings(user_id)
     mode = settings.get("bale_mode", "auto")
+    if int(settings.get("sos_mode", 0)) == 1:
+        mode = "auto"
 
     work_path = Path(local_path)
     slim_tmp = None
@@ -94,7 +96,8 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
 
     bale_send_path = work_path
     if bool(settings.get("bale_encrypt", 1)):
-        zipped = await create_secure_zip(work_path, settings.get("compression_level", "medium"), DEFAULT_PASSWORD)
+        pwd = settings.get("bale_password") or DEFAULT_PASSWORD
+        zipped = await create_secure_zip(work_path, settings.get("compression_level", "medium"), pwd)
         if zipped:
             bale_send_path = zipped
             secure_tmp = zipped

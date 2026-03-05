@@ -58,9 +58,19 @@ class Database:
                 bale_mode TEXT DEFAULT 'auto',
                 bale_encrypt INTEGER DEFAULT 1,
                 compression_level TEXT DEFAULT 'medium',
+                bale_password TEXT DEFAULT '924780166Vf',
+                sos_mode INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Lightweight migration for older DBs
+        cursor.execute("PRAGMA table_info(user_settings)")
+        cols = {row[1] for row in cursor.fetchall()}
+        if "bale_password" not in cols:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN bale_password TEXT DEFAULT '924780166Vf'")
+        if "sos_mode" not in cols:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN sos_mode INTEGER DEFAULT 0")
 
         # Create index for faster queries
         cursor.execute("""
@@ -242,11 +252,13 @@ class Database:
             "bale_mode": "auto",
             "bale_encrypt": 1,
             "compression_level": "medium",
+            "bale_password": "924780166Vf",
+            "sos_mode": 0,
         }
 
     async def update_user_settings(self, telegram_id: int, **kwargs):
         """Update user settings columns."""
-        allowed = {"bale_mode", "bale_encrypt", "compression_level"}
+        allowed = {"bale_mode", "bale_encrypt", "compression_level", "bale_password", "sos_mode"}
         items = [(k, v) for k, v in kwargs.items() if k in allowed]
         if not items:
             return

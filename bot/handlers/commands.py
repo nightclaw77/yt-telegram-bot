@@ -48,7 +48,8 @@ async def cmd_start(message: Message, command: CommandObject):
         "• Use <code>/live url</code> to capture a live stream.\n"
         "• Use <code>/cancel</code> to cancel ongoing downloads.\n"
         "• Use <code>/history</code> to see download history.\n"
-        "• Use <code>/settings</code> for Bale mode/encryption/compression.\n\n"
+        "• Use <code>/settings</code> for Bale mode/encryption/compression.\n"
+        "• Use <code>/bridge_status</code> for current bridge/sos status.\n\n"
         "✨ <b>Inline Mode:</b> Type <code>@Night77_tube_bot query</code> in any chat to search!"
     )
 
@@ -64,6 +65,11 @@ async def cmd_help(message: Message):
         "/live <url> - Capture a live stream\n"
         "/cancel - Cancel ongoing download\n"
         "/history - View download history\n"
+        "/settings - Bridge settings\n"
+        "/bridge_status - Show bridge status\n"
+        "/setpass <password> - Set Bale ZIP password\n"
+        "/sos - Enable emergency Bale-first mode\n"
+        "/sosoff - Disable emergency mode\n"
         "/help - Show this help message\n\n"
         "<b>Supported input:</b>\n"
         "• YouTube video links\n"
@@ -99,9 +105,60 @@ async def cmd_settings(message: Message):
         "⚙️ <b>Settings</b>\n\n"
         "• Bale mode: Auto = send immediately | Manual = show button\n"
         "• Encrypt: password-protected ZIP for Bale-only transfer\n"
-        "• Compression profile affects compressed-audio defaults",
+        "• Compression profile affects compressed-audio defaults\n"
+        "• ZIP password: use <code>/setpass new_password</code>\n"
+        "• Emergency toggle: <code>/sos</code> / <code>/sosoff</code>",
         reply_markup=_settings_keyboard(settings)
     )
+
+
+@router.message(Command("bridge_status"))
+async def cmd_bridge_status(message: Message):
+    from bot.database.models import Database
+    db = Database()
+    await db.init()
+    s = await db.get_user_settings(message.from_user.id)
+    masked = (s.get("bale_password", "")[:2] + "***" + s.get("bale_password", "")[-2:]) if s.get("bale_password") else "(default)"
+    await message.answer(
+        "📡 <b>Bridge Status</b>\n\n"
+        f"• Bale mode: <b>{s.get('bale_mode','auto')}</b>\n"
+        f"• Encrypt ZIP: <b>{'ON' if int(s.get('bale_encrypt',1)) else 'OFF'}</b>\n"
+        f"• Compression profile: <b>{s.get('compression_level','medium')}</b>\n"
+        f"• SOS mode: <b>{'ON' if int(s.get('sos_mode',0)) else 'OFF'}</b>\n"
+        f"• ZIP password: <code>{masked}</code>"
+    )
+
+
+@router.message(Command("setpass"))
+async def cmd_setpass(message: Message, command: CommandObject):
+    if not command.args or len(command.args.strip()) < 6:
+        await message.answer("❗️Usage: <code>/setpass yourStrongPass</code> (min 6 chars)")
+        return
+    pwd = command.args.strip()[:64]
+    from bot.database.models import Database
+    db = Database(); await db.init()
+    await db.update_user_settings(message.from_user.id, bale_password=pwd)
+    await message.answer("✅ Bale ZIP password updated.")
+
+
+@router.message(Command("sos"))
+async def cmd_sos(message: Message):
+    from bot.database.models import Database
+    db = Database(); await db.init()
+    await db.update_user_settings(message.from_user.id, sos_mode=1, bale_mode="auto")
+    await message.answer(
+        "🆘 SOS mode enabled.\n"
+        "From now, bridge prioritizes Bale auto-send.\n"
+        "Use /sosoff to return normal mode."
+    )
+
+
+@router.message(Command("sosoff"))
+async def cmd_sosoff(message: Message):
+    from bot.database.models import Database
+    db = Database(); await db.init()
+    await db.update_user_settings(message.from_user.id, sos_mode=0)
+    await message.answer("✅ SOS mode disabled. Back to normal bridge behavior.")
 
 
 @router.message(Command("search"))
