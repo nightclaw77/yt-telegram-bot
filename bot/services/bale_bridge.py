@@ -44,50 +44,58 @@ class BaleBridgeService:
         if caption:
             form.add_field("caption", caption[:900])
 
-        with path.open("rb") as f:
-            form.add_field(
-                media_field,
-                f,
-                filename=path.name,
-                content_type="application/octet-stream",
-            )
-
-            try:
-                timeout = aiohttp.ClientTimeout(total=300)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            timeout = aiohttp.ClientTimeout(total=300)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                with path.open("rb") as f:
+                    form.add_field(
+                        media_field,
+                        f,
+                        filename=path.name,
+                        content_type="application/octet-stream",
+                    )
                     async with session.post(endpoint, data=form) as resp:
-                        data = await resp.json(content_type=None)
-                        ok = bool(data.get("ok"))
-                        if ok:
-                            return True
+                        body = await resp.text()
+                        try:
+                            data = await resp.json(content_type=None)
+                        except Exception:
+                            data = {"ok": False, "error_code": resp.status, "description": body[:300]}
 
-                        logger.error("Bale API error on %s: %s", method, data)
+                ok = bool(data.get("ok"))
+                if ok:
+                    return True
 
-                        # Fallback path: sometimes media-specific endpoints reject while sendDocument accepts
-                        if method != "sendDocument":
-                            fallback_endpoint = f"https://tapi.bale.ai/bot{self.token}/sendDocument"
-                            fallback_form = aiohttp.FormData()
-                            fallback_form.add_field("chat_id", str(self.chat_id))
-                            if caption:
-                                fallback_form.add_field("caption", f"[fallback-doc] {caption[:860]}")
-                            f.seek(0)
-                            fallback_form.add_field(
-                                "document",
-                                f,
-                                filename=path.name,
-                                content_type="application/octet-stream",
-                            )
-                            async with session.post(fallback_endpoint, data=fallback_form) as f_resp:
+                logger.error("Bale API error on %s: %s", method, data)
+
+                # Fallback path: sometimes media-specific endpoints reject while sendDocument accepts
+                if method != "sendDocument":
+                    fallback_endpoint = f"https://tapi.bale.ai/bot{self.token}/sendDocument"
+                    fallback_form = aiohttp.FormData()
+                    fallback_form.add_field("chat_id", str(self.chat_id))
+                    if caption:
+                        fallback_form.add_field("caption", f"[fallback-doc] {caption[:860]}")
+                    with path.open("rb") as f2:
+                        fallback_form.add_field(
+                            "document",
+                            f2,
+                            filename=path.name,
+                            content_type="application/octet-stream",
+                        )
+                        async with session.post(fallback_endpoint, data=fallback_form) as f_resp:
+                            f_body = await f_resp.text()
+                            try:
                                 f_data = await f_resp.json(content_type=None)
-                                f_ok = bool(f_data.get("ok"))
-                                if not f_ok:
-                                    logger.error("Bale fallback sendDocument error: %s", f_data)
-                                return f_ok
+                            except Exception:
+                                f_data = {"ok": False, "error_code": f_resp.status, "description": f_body[:300]}
+                            f_ok = bool(f_data.get("ok"))
+                            if not f_ok:
+                                logger.error("Bale fallback sendDocument error: %s", f_data)
+                            return f_ok
 
-                        return False
-            except Exception:
-                logger.exception("Bale forward failed")
                 return False
+        except Exception:
+            logger.exception("Bale forward failed")
+            return False
 
 
 bale_bridge_service = BaleBridgeService()
