@@ -37,9 +37,9 @@ async def batch_clear(user_id: int):
     BATCH_STATE[user_id] = {"active": False, "items": []}
 
 
-async def batch_add(user_id: int, file_id: str, name: str):
+async def batch_add(user_id: int, file_id: str, name: str, size: int | None = None):
     state = BATCH_STATE.setdefault(user_id, {"active": True, "items": []})
-    state["items"].append({"file_id": file_id, "name": name})
+    state["items"].append({"file_id": file_id, "name": name, "size": size or 0})
 
 
 @router.message(F.video)
@@ -47,7 +47,7 @@ async def handle_uploaded_video(message: Message, bot: Bot):
     """Compress Telegram-uploaded video files or collect in batch mode."""
     user_id = message.from_user.id
     if _is_batch_on(user_id):
-        await batch_add(user_id, message.video.file_id, message.video.file_name or f"video_{message.message_id}.mp4")
+        await batch_add(user_id, message.video.file_id, message.video.file_name or f"video_{message.message_id}.mp4", message.video.file_size)
         count = len(BATCH_STATE[user_id]["items"])
         await message.answer(f"📦 به batch اضافه شد ({count} فایل).")
         return
@@ -62,7 +62,7 @@ async def handle_uploaded_video_document(message: Message, bot: Bot):
     mime = (message.document.mime_type or "").lower()
 
     if _is_batch_on(user_id):
-        await batch_add(user_id, message.document.file_id, message.document.file_name or f"doc_{message.message_id}.bin")
+        await batch_add(user_id, message.document.file_id, message.document.file_name or f"doc_{message.message_id}.bin", message.document.file_size)
         count = len(BATCH_STATE[user_id]["items"])
         await message.answer(f"📦 به batch اضافه شد ({count} فایل).")
         return
@@ -152,7 +152,7 @@ async def handle_uploaded_audio(message: Message, bot: Bot):
     """Collect uploaded audio in batch mode."""
     user_id = message.from_user.id
     if _is_batch_on(user_id):
-        await batch_add(user_id, message.audio.file_id, message.audio.file_name or f"audio_{message.message_id}.mp3")
+        await batch_add(user_id, message.audio.file_id, message.audio.file_name or f"audio_{message.message_id}.mp3", message.audio.file_size)
         count = len(BATCH_STATE[user_id]["items"])
         await message.answer(f"📦 به batch اضافه شد ({count} فایل).")
 
@@ -170,13 +170,32 @@ async def send_batch_to_bale(message: Message, bot: Bot):
 
     status = await message.answer(f"📦 در حال آماده‌سازی batch ({len(items)} فایل)...")
     tmp_paths: list[Path] = []
+    skipped: list[str] = []
     try:
+        max_downloadable = 19 * 1024 * 1024  # guard for Telegram getFile practical limit
         for idx, item in enumerate(items, start=1):
-            tg_file = await bot.get_file(item["file_id"])
+            declared_size = int(item.get("size") or 0)
             safe_name = (item.get("name") or f"file_{idx}").replace("/", "_")
-            local = config.DOWNLOADS_DIR / f"batch_{user_id}_{message.message_id}_{idx}_{safe_name}"
-            await bot.download(tg_file, destination=local)
-            tmp_paths.append(local)
+
+            if declared_size and declared_size > max_downloadable:
+                skipped.append(f"{safe_name} ({declared_size / (1024*1024):.1f}MB)")
+                continue
+
+            try:
+                tg_file = await bot.get_file(item["file_id"])
+                local = config.DOWNLOADS_DIR / f"batch_{user_id}_{message.message_id}_{idx}_{safe_name}"
+                await bot.download(tg_file, destination=local)
+                tmp_paths.append(local)
+            except Exception as e:
+                skipped.append(f"{safe_name} ({e})")
+                continue
+
+        if not tmp_paths:
+            msg = "❌ هیچ فایلی برای بسته‌بندی قابل دریافت نبود."
+            if skipped:
+                msg += "\nSkipped:\n- " + "\n- ".join(skipped[:5])
+            await status.edit_text(msg)
+            return
 
         db = Database(); await db.init()
         settings = await db.get_user_settings(user_id)
@@ -188,8 +207,11 @@ async def send_batch_to_bale(message: Message, bot: Bot):
             await status.edit_text("❌ ساخت ZIP ناموفق بود.")
             return
 
-        bale_ok = await bale_bridge_service.forward_file(zip_path, "document", caption=f"Batch package ({len(items)} files)")
-        await status.edit_text("✅ batch به بله ارسال شد." if bale_ok else "⚠️ ارسال batch به بله ناموفق بود.")
+        bale_ok = await bale_bridge_service.forward_file(zip_path, "document", caption=f"Batch package ({len(tmp_paths)} files)")
+        result_msg = "✅ batch به بله ارسال شد." if bale_ok else "⚠️ ارسال batch به بله ناموفق بود."
+        if skipped:
+            result_msg += "\n\nSkipped:\n- " + "\n- ".join(skipped[:5])
+        await status.edit_text(result_msg)
     except Exception as e:
         logger.exception("Batch send failed")
         await status.edit_text(f"❌ خطا در batch: {e}")
