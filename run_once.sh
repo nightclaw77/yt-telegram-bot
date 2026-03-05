@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-LOCKFILE="/tmp/yt-telegram-bot.lock"
-PIDFILE="/tmp/yt-telegram-bot.pid"
+LOCKFILE="/tmp/yt-bale-bot.lock"
+PIDFILE="/tmp/yt-bale-bot.pid"
 
 # Check if already running
 if [ -f "$PIDFILE" ]; then

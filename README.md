@@ -1,6 +1,6 @@
-# 🎬 Night YouTube Telegram Bot
+# 🎬 Night YouTube Bale Bot (Split Project)
 
-A powerful Telegram bot for downloading, searching, and summarizing YouTube content using AI.
+A split, isolated project cloned from the Telegram bot to evolve Bale-first workflows without risking Telegram production stability.
 
 ## ✨ Features
 
@@ -72,6 +72,12 @@ A powerful Telegram bot for downloading, searching, and summarizing YouTube cont
 
 ## 🛡 Security
 This bot includes a built-in user authorization system to ensure only allowed IDs can interact with it and consume server resources.
+
+## 🚧 Split Status
+
+- This repository is now isolated from Telegram production runtime.
+- Use this codebase for Bale-focused changes and high-risk experiments.
+- Current transport is still Telegram engine + Bale bridge; Bale-native command intake is next phase.
 
 ## 📝 License
 MIT License. Created by NightClaw.

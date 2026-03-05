@@ -34,7 +34,7 @@ LOCK_FD = None
 def acquire_single_instance_lock():
     """Prevent multiple bot instances from running concurrently."""
     global LOCK_FD
-    lock_path = "/tmp/yt-telegram-bot.instance.lock"
+    lock_path = "/tmp/yt-bale-bot.instance.lock"
     LOCK_FD = open(lock_path, "w")
     try:
         fcntl.flock(LOCK_FD, fcntl.LOCK_EX | fcntl.LOCK_NB)

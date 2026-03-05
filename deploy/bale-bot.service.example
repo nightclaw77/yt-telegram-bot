@@ -1,0 +1,17 @@
+[Unit]
+Description=YouTube Bale Bot (split project)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace/projects/yt-bale-bot
+Environment="PATH=/root/.openclaw/workspace/projects/yt-bale-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/root/.openclaw/workspace/projects/yt-bale-bot/venv/bin/python3 main.py
+Restart=always
+RestartSec=8
+StandardOutput=append:/root/.openclaw/workspace/projects/yt-bale-bot/bot.log
+StandardError=append:/root/.openclaw/workspace/projects/yt-bale-bot/bot.log
+
+[Install]
+WantedBy=multi-user.target
