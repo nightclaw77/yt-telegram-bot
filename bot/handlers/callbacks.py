@@ -13,6 +13,7 @@ from bot.services.summarizer import SummarizerService
 from bot.services.bale_bridge import bale_bridge_service
 from bot.services.file_cache import file_cache_service
 from bot.services.secure_package import create_secure_zip, DEFAULT_PASSWORD
+from bot.services.local_media_registry import remember as remember_local_media
 from bot.utils.url_shortener import reconstruct_url, shorten_callback
 
 logger = logging.getLogger(__name__)
@@ -501,10 +502,22 @@ async def upload_with_retry(bot: Bot, message, media_type: str, path: str, user_
 
     for attempt in range(max_retries):
         try:
+            sent_msg = None
             if media_type == "video":
-                await message.answer_video(FSInputFile(path))
+                sent_msg = await message.answer_video(FSInputFile(path))
             elif media_type == "audio":
-                await message.answer_audio(FSInputFile(path))
+                sent_msg = await message.answer_audio(FSInputFile(path))
+
+            if user_id and sent_msg:
+                try:
+                    if getattr(sent_msg, "video", None):
+                        remember_local_media(user_id, sent_msg.video.file_id, path)
+                    elif getattr(sent_msg, "audio", None):
+                        remember_local_media(user_id, sent_msg.audio.file_id, path)
+                    elif getattr(sent_msg, "document", None):
+                        remember_local_media(user_id, sent_msg.document.file_id, path)
+                except Exception:
+                    pass
 
             # Forward to Bale / offer manual send based on user settings
             if bale_bridge_service.enabled and user_id:
@@ -819,12 +832,17 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
             if compress:
                 caption += " (Compressed)"
             
-            await bot.send_audio(
+            sent_msg = await bot.send_audio(
                 chat_id=user_id,
                 audio=FSInputFile(final_path),
                 caption=caption,
                 duration=duration_sec if duration_sec > 0 else None
             )
+            try:
+                if getattr(sent_msg, "audio", None):
+                    remember_local_media(user_id, sent_msg.audio.file_id, final_path)
+            except Exception:
+                pass
 
             if bale_bridge_service.enabled:
                 await _send_or_offer_bale(user_id, bot, final_path, "audio")

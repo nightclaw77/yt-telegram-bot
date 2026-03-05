@@ -11,6 +11,7 @@ from bot.services.compressor import CompressionService
 from bot.services.bale_bridge import bale_bridge_service
 from bot.services.file_cache import file_cache_service
 from bot.services.secure_package import create_secure_zip_many, DEFAULT_PASSWORD
+from bot.services.local_media_registry import resolve as resolve_local_media, remember as remember_local_media
 from bot.utils.rate_limiter import RateLimiter
 from bot.utils.validators import validate_youtube_url, is_channel_url
 from bot.utils.url_shortener import shorten_callback
@@ -121,10 +122,15 @@ async def _compress_and_send(message: Message, bot: Bot, file_id: str, name_hint
             f"بعد: {after_mb:.1f} MB"
         )
 
-        await message.answer_video(
+        sent_msg = await message.answer_video(
             FSInputFile(str(compressed_path)),
             caption=f"🗜 Compressed\n{before_mb:.1f}MB → {after_mb:.1f}MB"
         )
+        try:
+            if getattr(sent_msg, "video", None):
+                remember_local_media(message.from_user.id, sent_msg.video.file_id, str(compressed_path))
+        except Exception:
+            pass
 
         if bale_bridge_service.enabled:
             bale_ok = await bale_bridge_service.forward_file(
@@ -170,6 +176,7 @@ async def send_batch_to_bale(message: Message, bot: Bot):
 
     status = await message.answer(f"📦 در حال آماده‌سازی batch ({len(items)} فایل)...")
     tmp_paths: list[Path] = []
+    downloaded_tmp_paths: list[Path] = []
     skipped: list[str] = []
     try:
         max_downloadable = 19 * 1024 * 1024  # guard for Telegram getFile practical limit
@@ -177,8 +184,14 @@ async def send_batch_to_bale(message: Message, bot: Bot):
             declared_size = int(item.get("size") or 0)
             safe_name = (item.get("name") or f"file_{idx}").replace("/", "_")
 
+            # local-first path (for files already produced by this bot)
+            local_known = resolve_local_media(user_id, item["file_id"])
+            if local_known:
+                tmp_paths.append(Path(local_known))
+                continue
+
             if declared_size and declared_size > max_downloadable:
-                skipped.append(f"{safe_name} ({declared_size / (1024*1024):.1f}MB)")
+                skipped.append(f"{safe_name} ({declared_size / (1024*1024):.1f}MB, no local copy)")
                 continue
 
             try:
@@ -186,6 +199,7 @@ async def send_batch_to_bale(message: Message, bot: Bot):
                 local = config.DOWNLOADS_DIR / f"batch_{user_id}_{message.message_id}_{idx}_{safe_name}"
                 await bot.download(tg_file, destination=local)
                 tmp_paths.append(local)
+                downloaded_tmp_paths.append(local)
             except Exception as e:
                 skipped.append(f"{safe_name} ({e})")
                 continue
@@ -216,7 +230,7 @@ async def send_batch_to_bale(message: Message, bot: Bot):
         logger.exception("Batch send failed")
         await status.edit_text(f"❌ خطا در batch: {e}")
     finally:
-        for p in tmp_paths:
+        for p in downloaded_tmp_paths:
             if p.exists():
                 p.unlink(missing_ok=True)
         await batch_clear(user_id)
