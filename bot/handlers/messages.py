@@ -14,6 +14,7 @@ from bot.services.file_cache import file_cache_service
 from bot.services.secure_package import create_secure_zip_many, DEFAULT_PASSWORD
 from bot.services.local_media_registry import resolve as resolve_local_media, remember as remember_local_media
 from bot.services.direct_fetch import direct_fetch_service
+from bot.services.github_apps import github_apps_service
 from bot.utils.rate_limiter import RateLimiter
 from bot.utils.validators import validate_youtube_url, is_channel_url
 from bot.utils.url_shortener import shorten_callback
@@ -409,6 +410,42 @@ async def handle_text_input(message: Message, bot: Bot):
         await message.answer("⏳ Too many requests. Please wait a moment.")
         return
     
+    # GitHub repo URL -> fetch release assets (android v8a + windows x64)
+    if "github.com/" in text and "/" in text.replace("https://github.com/", "").replace("http://github.com/", ""):
+        from urllib.parse import urlparse
+        p = urlparse(text)
+        parts = [x for x in p.path.split("/") if x]
+        if len(parts) >= 2:
+            full_name = f"{parts[0]}/{parts[1]}"
+            status = await message.answer(f"📦 GitHub repo detected: <b>{full_name}</b>\nدر حال بررسی release...")
+            release = await github_apps_service.latest_release_assets(full_name)
+            assets = release.get("assets", [])
+            tag = release.get("tag", "")
+            if assets:
+                picks = github_apps_service.pick_target_assets(assets)
+                sent = 0
+                for label, asset in (("android_v8a", picks.get("android_v8a")), ("windows_x64", picks.get("windows_x64"))):
+                    if not asset:
+                        continue
+                    local = await github_apps_service.download_asset(asset["url"], asset["name"])
+                    if not local:
+                        continue
+                    size_h = asset.get("size_h") or "?"
+                    doc = await message.answer_document(FSInputFile(str(local)), caption=f"{full_name}\n{label} • {size_h}\n🏷 {tag or 'latest'}")
+                    try:
+                        if getattr(doc, "document", None):
+                            remember_local_media(message.from_user.id, doc.document.file_id, str(local))
+                    except Exception:
+                        pass
+                    if bale_bridge_service.enabled:
+                        await bale_bridge_service.forward_file(local, "document", caption=f"{full_name} {label}")
+                    sent += 1
+                if sent:
+                    await status.edit_text(f"✅ {sent} فایل release ارسال شد.")
+                    return
+            # fallthrough to direct if no release assets found
+            await status.edit_text("⚠️ Asset مناسب release پیدا نشد؛ در حال تلاش دانلود مستقیم لینک...")
+
     # Non-YouTube direct URL download flow
     if not validate_youtube_url(text):
         status = await message.answer("📥 لینک مستقیم دریافت شد، در حال دانلود...")
