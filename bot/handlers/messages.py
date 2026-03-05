@@ -408,7 +408,12 @@ async def handle_text_input(message: Message, bot: Bot):
     # Non-YouTube direct URL download flow
     if not validate_youtube_url(text):
         status = await message.answer("📥 لینک مستقیم دریافت شد، در حال دانلود...")
-        local = await direct_fetch_service.download(text, prefix=f"direct_{message.from_user.id}_{message.message_id}")
+        try:
+            local = await direct_fetch_service.download(text, prefix=f"direct_{message.from_user.id}_{message.message_id}")
+        except Exception as e:
+            await status.edit_text(f"❌ دانلود لینک مستقیم ناموفق بود: {e}")
+            return
+
         if not local:
             await status.edit_text("❌ دانلود لینک مستقیم ناموفق بود.")
             return
