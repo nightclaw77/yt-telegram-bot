@@ -1,6 +1,7 @@
 """Callback query handlers for Telegram bot."""
 import asyncio
 import logging
+from urllib.parse import urlparse, parse_qs
 from aiogram import Router, Bot
 from aiogram.types import CallbackQuery, FSInputFile
 
@@ -17,6 +18,25 @@ router = Router()
 youtube_service = YouTubeService()
 download_manager = DownloadManager.get_instance()
 summarizer = SummarizerService()
+
+
+def _canonical_video_ref(url: str) -> str:
+    """Normalize YouTube URL to stable cache key based on video id when possible."""
+    try:
+        p = urlparse(url)
+        host = (p.netloc or "").lower()
+        if "youtu.be" in host:
+            vid = p.path.strip("/")
+            if vid:
+                return f"youtube:{vid}"
+        if "youtube.com" in host:
+            qs = parse_qs(p.query or "")
+            vid = (qs.get("v") or [""])[0]
+            if vid:
+                return f"youtube:{vid}"
+    except Exception:
+        pass
+    return url.strip()
 
 
 async def show_quality_options(user_id: int, url: str, mode: str, bot: Bot):
@@ -447,8 +467,9 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
     except:
         pass
     
-    base_cache_key = file_cache_service.make_key("yt", "video", url, format_id)
-    compressed_cache_key = file_cache_service.make_key("yt", "video", url, format_id, "compressed")
+    cache_ref = _canonical_video_ref(url)
+    base_cache_key = file_cache_service.make_key("yt", "video", cache_ref, format_id)
+    compressed_cache_key = file_cache_service.make_key("yt", "video", cache_ref, format_id, "compressed")
 
     path = file_cache_service.get(compressed_cache_key if compress else base_cache_key)
     if path:
@@ -590,8 +611,9 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
         except Exception:
             pass
     
-    base_cache_key = file_cache_service.make_key("yt", "audio", url, "bestaudio")
-    compressed_cache_key = file_cache_service.make_key("yt", "audio", url, "bestaudio", "compressed-64k")
+    cache_ref = _canonical_video_ref(url)
+    base_cache_key = file_cache_service.make_key("yt", "audio", cache_ref, "bestaudio")
+    compressed_cache_key = file_cache_service.make_key("yt", "audio", cache_ref, "bestaudio", "compressed-64k")
 
     path = file_cache_service.get(compressed_cache_key if compress else base_cache_key)
     if path:
