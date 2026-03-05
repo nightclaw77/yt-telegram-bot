@@ -14,6 +14,7 @@ from bot.services.bale_bridge import bale_bridge_service
 from bot.services.file_cache import file_cache_service
 from bot.services.secure_package import create_secure_zip, DEFAULT_PASSWORD
 from bot.services.local_media_registry import remember as remember_local_media
+from bot.services.github_apps import github_apps_service
 from bot.utils.url_shortener import reconstruct_url, shorten_callback
 
 logger = logging.getLogger(__name__)
@@ -222,6 +223,46 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
             return
         await _send_or_offer_bale(callback.from_user.id, bot, local, media, force_send=True)
         await callback.answer("در حال ارسال به بله...")
+        return
+
+    if action == "ghdl":
+        full_name = parts[1] if len(parts) > 1 else ""
+        if not full_name or "/" not in full_name:
+            await callback.answer("Repo نامعتبر", show_alert=True)
+            return
+
+        user_id = callback.from_user.id
+        status = await bot.send_message(user_id, f"📦 بررسی release برای <b>{full_name}</b> ...")
+        assets = await github_apps_service.latest_release_assets(full_name)
+        if not assets:
+            await status.edit_text("❌ Latest release یا asset پیدا نشد.")
+            return
+
+        picks = github_apps_service.pick_target_assets(assets)
+        sent = 0
+        for label, asset in (("android_v8a", picks.get("android_v8a")), ("windows_x64", picks.get("windows_x64"))):
+            if not asset:
+                continue
+            local = await github_apps_service.download_asset(asset["url"], asset["name"])
+            if not local:
+                continue
+
+            doc = await bot.send_document(user_id, FSInputFile(str(local)), caption=f"{full_name}\n{label}\n⭐ from GitHub release")
+            try:
+                if getattr(doc, "document", None):
+                    remember_local_media(user_id, doc.document.file_id, str(local))
+            except Exception:
+                pass
+
+            if bale_bridge_service.enabled:
+                await _send_or_offer_bale(user_id, bot, str(local), "document")
+            sent += 1
+
+        if sent == 0:
+            await status.edit_text("⚠️ فایل مناسب پیدا نشد (v8a یا windows x64).")
+        else:
+            await status.edit_text(f"✅ {sent} فایل ارسال شد (تلگرام + بله).")
+        await callback.answer("Done")
         return
 
     if action == "info":

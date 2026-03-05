@@ -9,6 +9,7 @@ from aiogram.types import InlineQuery, InlineQueryResultArticle, InlineQueryResu
 from aiogram.enums import ParseMode
 
 from bot.services.youtube import YouTubeService
+from bot.services.github_apps import github_apps_service
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -68,8 +69,32 @@ async def handle_inline_query(inline_query: InlineQuery):
     logger.info(f"Inline search query: {query}")
     
     try:
+        # GitHub inline mode: prefix query with `gh `
+        if query.lower().startswith("gh "):
+            gh_q = query[3:].strip()
+            repos = await github_apps_service.search_repos(gh_q, limit=8)
+            results = []
+            for r in repos:
+                full = r["full_name"]
+                stars = r["stars"]
+                owner = r["owner"]
+                desc = (r.get("description") or "")[:160]
+                results.append(
+                    InlineQueryResultArticle(
+                        id=hashlib.md5(full.encode()).hexdigest(),
+                        title=f"{full}",
+                        description=f"⭐ {stars} | 👤 {owner} | {desc}",
+                        input_message_content=InputTextMessageContent(
+                            message_text=f"📦 <b>{full}</b>\n⭐ {stars} | 👤 {owner}\n\nTap button to download v8a/windows64 assets.",
+                            parse_mode=ParseMode.HTML,
+                        ),
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="⬇️ Download app assets", callback_data=f"ghdl|{full}")]
+                        ])
+                    )
+                )
         # Check if it's a channel URL or search keywords
-        if "youtube.com" in query or "youtu.be" in query:
+        elif "youtube.com" in query or "youtu.be" in query:
             # If it's a URL, we'll try to get video info
             info = await youtube_service.get_video_info(query)
             if info:

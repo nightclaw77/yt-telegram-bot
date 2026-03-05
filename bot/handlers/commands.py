@@ -7,6 +7,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, R
 
 from bot.config import config
 from bot.services.youtube import YouTubeService
+from bot.services.github_apps import github_apps_service
 from bot.utils.rate_limiter import RateLimiter
 from bot.utils.url_shortener import shorten_callback
 
@@ -58,6 +59,7 @@ async def cmd_start(message: Message, command: CommandObject):
         "• Send a <b>Channel URL</b> to see latest/top/live content.\n"
         "• Send any <b>Telegram video file</b> (or video document) to compress it.\n"
         "• Use <code>/search query</code> to find videos.\n"
+        "• Use <code>/ghsearch app</code> to find GitHub apps.\n"
         "• Use <code>/live url</code> to capture a live stream.\n"
         "• Use <code>/cancel</code> to cancel ongoing downloads.\n"
         "• Use <code>/history</code> to see download history.\n"
@@ -85,6 +87,7 @@ async def cmd_help(message: Message):
         "/setpass <password> - Set Bale ZIP password\n"
         "/sos - Enable emergency Bale-first mode\n"
         "/sosoff - Disable emergency mode\n"
+        "/ghsearch <query> - Search GitHub apps (sorted by stars)\n"
         "/help - Show this help message\n\n"
         "<b>Supported input:</b>\n"
         "• YouTube video links\n"
@@ -194,6 +197,31 @@ async def btn_sos_on(message: Message):
 @router.message(lambda m: (m.text or "") == "✅ SOS OFF")
 async def btn_sos_off(message: Message):
     await cmd_sosoff(message)
+
+
+@router.message(Command("ghsearch"))
+async def cmd_ghsearch(message: Message, command: CommandObject):
+    if not command.args:
+        await message.answer("🔎 Usage: <code>/ghsearch app name</code>")
+        return
+
+    q = command.args.strip()
+    msg = await message.answer(f"🔎 Searching GitHub: <b>{q}</b>")
+    repos = await github_apps_service.search_repos(q, limit=8)
+    if not repos:
+        await msg.edit_text("❌ No repositories found.")
+        return
+
+    lines = ["<b>GitHub Results (Stars desc)</b>\n"]
+    kb_rows = []
+    for i, r in enumerate(repos[:8], 1):
+        full = r['full_name']
+        stars = r['stars']
+        owner = r['owner']
+        lines.append(f"{i}. <b>{full}</b> — ⭐ {stars} — 👤 {owner}")
+        kb_rows.append([InlineKeyboardButton(text=f"📦 {full}", callback_data=f"ghdl|{full}")])
+
+    await msg.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), disable_web_page_preview=True)
 
 
 @router.message(Command("search"))
