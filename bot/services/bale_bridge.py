@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Optional
+import asyncio
 
 import aiohttp
 
@@ -40,63 +41,72 @@ class BaleBridgeService:
 
         endpoint = f"https://tapi.bale.ai/bot{self.token}/{method}"
 
-        form = aiohttp.FormData()
-        form.add_field("chat_id", str(self.chat_id))
-        if caption:
-            form.add_field("caption", caption[:900])
-
-        try:
-            timeout = aiohttp.ClientTimeout(total=300)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                with path.open("rb") as f:
-                    form.add_field(
-                        media_field,
-                        f,
-                        filename=path.name,
-                        content_type="application/octet-stream",
-                    )
-                    async with session.post(endpoint, data=form) as resp:
-                        body = await resp.text()
-                        try:
-                            data = await resp.json(content_type=None)
-                        except Exception:
-                            data = {"ok": False, "error_code": resp.status, "description": body[:300]}
-
-                ok = bool(data.get("ok"))
-                if ok:
-                    return True
-
-                logger.error("Bale API error on %s: %s", method, data)
-
-                # Fallback path: sometimes media-specific endpoints reject while sendDocument accepts
-                if method != "sendDocument":
-                    fallback_endpoint = f"https://tapi.bale.ai/bot{self.token}/sendDocument"
-                    fallback_form = aiohttp.FormData()
-                    fallback_form.add_field("chat_id", str(self.chat_id))
-                    if caption:
-                        fallback_form.add_field("caption", f"[fallback-doc] {caption[:860]}")
-                    with path.open("rb") as f2:
-                        fallback_form.add_field(
-                            "document",
-                            f2,
+        for attempt in range(3):
+            try:
+                timeout = aiohttp.ClientTimeout(total=300)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    with path.open("rb") as f:
+                        form = aiohttp.FormData()
+                        form.add_field("chat_id", str(self.chat_id))
+                        if caption:
+                            form.add_field("caption", caption[:900])
+                        form.add_field(
+                            media_field,
+                            f,
                             filename=path.name,
                             content_type="application/octet-stream",
                         )
-                        async with session.post(fallback_endpoint, data=fallback_form) as f_resp:
-                            f_body = await f_resp.text()
+                        async with session.post(endpoint, data=form) as resp:
+                            body = await resp.text()
                             try:
-                                f_data = await f_resp.json(content_type=None)
+                                data = await resp.json(content_type=None)
                             except Exception:
-                                f_data = {"ok": False, "error_code": f_resp.status, "description": f_body[:300]}
-                            f_ok = bool(f_data.get("ok"))
-                            if not f_ok:
-                                logger.error("Bale fallback sendDocument error: %s", f_data)
-                            return f_ok
+                                data = {"ok": False, "error_code": resp.status, "description": body[:300]}
 
+                    ok = bool(data.get("ok"))
+                    if ok:
+                        return True
+
+                    logger.error("Bale API error on %s: %s", method, data)
+
+                    # Fallback path: sometimes media-specific endpoints reject while sendDocument accepts
+                    if method != "sendDocument":
+                        fallback_endpoint = f"https://tapi.bale.ai/bot{self.token}/sendDocument"
+                        fallback_form = aiohttp.FormData()
+                        fallback_form.add_field("chat_id", str(self.chat_id))
+                        if caption:
+                            fallback_form.add_field("caption", f"[fallback-doc] {caption[:860]}")
+                        with path.open("rb") as f2:
+                            fallback_form.add_field(
+                                "document",
+                                f2,
+                                filename=path.name,
+                                content_type="application/octet-stream",
+                            )
+                            async with session.post(fallback_endpoint, data=fallback_form) as f_resp:
+                                f_body = await f_resp.text()
+                                try:
+                                    f_data = await f_resp.json(content_type=None)
+                                except Exception:
+                                    f_data = {"ok": False, "error_code": f_resp.status, "description": f_body[:300]}
+                                f_ok = bool(f_data.get("ok"))
+                                if f_ok:
+                                    return True
+                                logger.error("Bale fallback sendDocument error: %s", f_data)
+
+                    # retry only for transient 5xx/connectivity cases
+                    if int(data.get("error_code", 0)) >= 500 and attempt < 2:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                        continue
+                    return False
+            except Exception:
+                logger.exception("Bale forward failed (attempt %s)", attempt + 1)
+                if attempt < 2:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
                 return False
-        except Exception:
-            logger.exception("Bale forward failed")
-            return False
+
+        return False
 
 
     async def forward_text(self, text: str) -> bool:
@@ -104,18 +114,27 @@ class BaleBridgeService:
             return False
         endpoint = f"https://tapi.bale.ai/bot{self.token}/sendMessage"
         payload = {"chat_id": str(self.chat_id), "text": text[:3800]}
-        try:
-            timeout = aiohttp.ClientTimeout(total=60)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(endpoint, json=payload) as resp:
-                    data = await resp.json(content_type=None)
-                    ok = bool(data.get("ok"))
-                    if not ok:
+        for attempt in range(3):
+            try:
+                timeout = aiohttp.ClientTimeout(total=60)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(endpoint, json=payload) as resp:
+                        data = await resp.json(content_type=None)
+                        ok = bool(data.get("ok"))
+                        if ok:
+                            return True
                         logger.error("Bale sendMessage error: %s", data)
-                    return ok
-        except Exception:
-            logger.exception("Bale text forward failed")
-            return False
+                        if int(data.get("error_code", 0)) >= 500 and attempt < 2:
+                            await asyncio.sleep(1.2 * (attempt + 1))
+                            continue
+                        return False
+            except Exception:
+                logger.exception("Bale text forward failed (attempt %s)", attempt + 1)
+                if attempt < 2:
+                    await asyncio.sleep(1.2 * (attempt + 1))
+                    continue
+                return False
+        return False
 
 
 bale_bridge_service = BaleBridgeService()
