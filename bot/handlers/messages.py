@@ -100,8 +100,16 @@ async def _smart_forward_debounce(user_id: int):
 async def _forward_incoming_file_to_bale(message: Message, bot: Bot, file_id: str, filename: str, media_type: str):
     """Smart forwarding: auto-detect single vs multi uploads and choose direct vs zip."""
     tmp = config.DOWNLOADS_DIR / f"fwd_{message.from_user.id}_{message.message_id}_{filename.replace('/', '_')}"
-    tg_file = await bot.get_file(file_id)
-    await bot.download(tg_file, destination=tmp)
+    try:
+        tg_file = await bot.get_file(file_id)
+        await bot.download(tg_file, destination=tmp)
+    except Exception as e:
+        err = str(e)
+        if "file is too big" in err.lower():
+            await message.answer("⚠️ این فایل برای دریافت مستقیم از Telegram Bot API بزرگ است.\nلطفاً لینک مستقیم فایل را بفرست تا دانلود و به بله ارسال شود.")
+        else:
+            await message.answer(f"⚠️ خطا در دریافت فایل از تلگرام: {e}")
+        return
 
     user_id = message.from_user.id
     state = SMART_FORWARD.setdefault(user_id, {"items": [], "task": None, "bot": bot, "chat_id": message.chat.id})
