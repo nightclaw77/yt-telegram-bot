@@ -7,6 +7,9 @@ Modular Architecture with Download Queue, Progress Tracking, and Rate Limiting
 
 import asyncio
 import logging
+import os
+import fcntl
+import atexit
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
@@ -24,6 +27,32 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+LOCK_FD = None
+
+
+def acquire_single_instance_lock():
+    """Prevent multiple bot instances from running concurrently."""
+    global LOCK_FD
+    lock_path = "/tmp/yt-telegram-bot.instance.lock"
+    LOCK_FD = open(lock_path, "w")
+    try:
+        fcntl.flock(LOCK_FD, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        LOCK_FD.write(str(os.getpid()))
+        LOCK_FD.flush()
+    except OSError:
+        raise RuntimeError("Another instance of yt-telegram-bot is already running")
+
+
+def release_single_instance_lock():
+    global LOCK_FD
+    try:
+        if LOCK_FD:
+            fcntl.flock(LOCK_FD, fcntl.LOCK_UN)
+            LOCK_FD.close()
+            LOCK_FD = None
+    except Exception:
+        pass
 
 
 # --- Authorization Middleware ---
@@ -61,6 +90,9 @@ async def authorize_user(handler, event, data):
 
 async def main():
     """Main entry point."""
+    acquire_single_instance_lock()
+    atexit.register(release_single_instance_lock)
+
     # Load and validate configuration
     config.load()
     config.validate()
