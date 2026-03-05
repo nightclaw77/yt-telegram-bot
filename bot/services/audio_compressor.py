@@ -20,7 +20,13 @@ class AudioCompressionService:
     def _ensure_ffmpeg(self) -> bool:
         return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
-    async def compress_audio(self, input_path: Path, target_bitrate_k: int = 64) -> Optional[Path]:
+    async def compress_audio(
+        self,
+        input_path: Path,
+        target_bitrate_k: int = 64,
+        sample_rate: int = 44100,
+        channels: int = 2,
+    ) -> Optional[Path]:
         """Compress audio file and return output path."""
         if not self._ensure_ffmpeg():
             raise RuntimeError("ffmpeg/ffprobe is not installed")
@@ -35,8 +41,8 @@ class AudioCompressionService:
             "ffmpeg", "-y", "-i", str(input_path),
             "-c:a", "libmp3lame",
             "-b:a", f"{target_bitrate_k}k",
-            "-ar", "44100",
-            "-ac", "2",
+            "-ar", str(sample_rate),
+            "-ac", str(channels),
             str(output_path)
         ]
 

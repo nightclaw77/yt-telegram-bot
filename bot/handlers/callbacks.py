@@ -710,15 +710,35 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
             )
 
             if bale_bridge_service.enabled:
+                from pathlib import Path as _Path
+                bale_path = _Path(final_path)
+                bale_max_bytes = config.BALE_SAFE_MAX_MB * 1024 * 1024
+                cleanup_bale_temp = None
+
+                if bale_path.stat().st_size > bale_max_bytes:
+                    await bot.send_message(
+                        user_id,
+                        f"ℹ️ فایل برای بله بزرگ بود ({bale_path.stat().st_size / (1024*1024):.1f}MB). نسخه سبک‌تر می‌سازم..."
+                    )
+                    from bot.services.audio_compressor import AudioCompressionService
+                    _ac = AudioCompressionService()
+                    slim = await _ac.compress_audio(bale_path, target_bitrate_k=32, sample_rate=22050, channels=1)
+                    if slim:
+                        bale_path = slim
+                        cleanup_bale_temp = slim
+
                 bale_ok = await bale_bridge_service.forward_file(
-                    final_path,
+                    bale_path,
                     "audio",
-                    caption="Forwarded audio from Night YouTube Bot"
+                    caption=f"Forwarded audio from Night YouTube Bot ({bale_path.stat().st_size / (1024*1024):.1f}MB)"
                 )
                 await bot.send_message(
                     user_id,
                     "✅ فایل صوتی به بله هم ارسال شد." if bale_ok else "⚠️ ارسال فایل صوتی به بله ناموفق بود."
                 )
+
+                if cleanup_bale_temp and cleanup_bale_temp.exists() and not file_cache_service.is_cache_file(cleanup_bale_temp):
+                    cleanup_bale_temp.unlink(missing_ok=True)
 
             import os
             if os.path.exists(final_path) and not file_cache_service.is_cache_file(final_path):

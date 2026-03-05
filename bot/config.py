@@ -35,6 +35,9 @@ class Config:
     # File cache (reuse recent outputs)
     FILE_CACHE_ENABLED: bool = os.getenv("FILE_CACHE_ENABLED", "true").lower() == "true"
     FILE_CACHE_TTL_SECONDS: int = int(os.getenv("FILE_CACHE_TTL_SECONDS", "3600"))
+
+    # Bale safe upload tuning
+    BALE_SAFE_MAX_MB: int = int(os.getenv("BALE_SAFE_MAX_MB", "20"))
     
     @classmethod
     def load(cls):
