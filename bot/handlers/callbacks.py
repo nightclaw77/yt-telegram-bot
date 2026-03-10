@@ -24,6 +24,8 @@ youtube_service = YouTubeService()
 download_manager = DownloadManager.get_instance()
 summarizer = SummarizerService()
 _ACTIVE_SPLIT_JOBS: set[str] = set()
+# Temporary stability mode: zip-part split is primary until clip splitter is fully stabilized.
+ENABLE_VIDEO_CLIP_SPLIT = False
 
 
 def _canonical_video_ref(url: str) -> str:
@@ -257,7 +259,7 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
         _ACTIVE_SPLIT_JOBS.add(split_job_key)
         try:
             try:
-                if media_type == "video" and bale_target.suffix.lower() == ".mp4":
+                if ENABLE_VIDEO_CLIP_SPLIT and media_type == "video" and bale_target.suffix.lower() == ".mp4":
                     await bot.send_message(
                         user_id,
                         f"ℹ️ فایل بزرگه ({bale_target.stat().st_size / (1024*1024):.1f}MB). در حال تقسیم به کلیپ‌های MP4..."
