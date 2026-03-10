@@ -23,6 +23,7 @@ router = Router()
 youtube_service = YouTubeService()
 download_manager = DownloadManager.get_instance()
 summarizer = SummarizerService()
+_ACTIVE_SPLIT_JOBS: set[str] = set()
 
 
 def _canonical_video_ref(url: str) -> str:
@@ -95,6 +96,8 @@ async def _split_video_for_bale(file_path: Path, part_size_mb: int) -> list[Path
     parts = max(1, int((file_size + target_bytes - 1) // target_bytes))
 
     for _ in range(6):
+        if parts > 20:
+            raise RuntimeError("required part count is too high for stable clip split")
         for p in file_path.parent.glob(f"{file_path.stem}.clip*.mp4"):
             p.unlink(missing_ok=True)
 
@@ -242,31 +245,44 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
     bale_max_bytes = config.BALE_SAFE_MAX_MB * 1024 * 1024
 
     if bale_target.exists() and bale_target.stat().st_size > bale_max_bytes:
+        split_job_key = f"{user_id}:{str(bale_target.resolve())}"
+        if split_job_key in _ACTIVE_SPLIT_JOBS:
+            await bot.send_message(user_id, "⏳ همین فایل الان در حال تقسیم/ارسال به بله است. لطفاً صبر کن.")
+            if slim_tmp and slim_tmp.exists() and not file_cache_service.is_cache_file(slim_tmp):
+                slim_tmp.unlink(missing_ok=True)
+            if secure_tmp and secure_tmp.exists() and not file_cache_service.is_cache_file(secure_tmp):
+                secure_tmp.unlink(missing_ok=True)
+            return
+
+        _ACTIVE_SPLIT_JOBS.add(split_job_key)
         try:
-            if media_type == "video" and bale_target.suffix.lower() == ".mp4":
-                await bot.send_message(
-                    user_id,
-                    f"ℹ️ فایل بزرگه ({bale_target.stat().st_size / (1024*1024):.1f}MB). در حال تقسیم به کلیپ‌های MP4..."
-                )
-                split_parts = await _split_video_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
-                split_media_type = "video"
-            else:
-                await bot.send_message(
-                    user_id,
-                    f"ℹ️ فایل از سقف آپلود بله بزرگ‌تره ({bale_target.stat().st_size / (1024*1024):.1f}MB). در حال تبدیل به zip چندپارته..."
-                )
-                split_parts = await _split_zip_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
-                split_media_type = "document"
-        except Exception as e:
-            logger.exception("Failed to split file for Bale")
-            # Fallback: zip multi-part when video clip split is not possible
             try:
-                split_parts = await _split_zip_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
-                split_media_type = "document"
-                await bot.send_message(user_id, "ℹ️ تقسیم ویدیویی موفق نشد؛ با روش zip چندپارته ارسال می‌کنم.")
-            except Exception as e2:
-                logger.exception("Fallback zip split also failed")
-                await bot.send_message(user_id, f"⚠️ تقسیم فایل برای بله ناموفق بود: {str(e2)[:140]}")
+                if media_type == "video" and bale_target.suffix.lower() == ".mp4":
+                    await bot.send_message(
+                        user_id,
+                        f"ℹ️ فایل بزرگه ({bale_target.stat().st_size / (1024*1024):.1f}MB). در حال تقسیم به کلیپ‌های MP4..."
+                    )
+                    split_parts = await _split_video_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
+                    split_media_type = "video"
+                else:
+                    await bot.send_message(
+                        user_id,
+                        f"ℹ️ فایل از سقف آپلود بله بزرگ‌تره ({bale_target.stat().st_size / (1024*1024):.1f}MB). در حال تبدیل به zip چندپارته..."
+                    )
+                    split_parts = await _split_zip_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
+                    split_media_type = "document"
+            except Exception:
+                logger.exception("Failed to split file for Bale")
+                # Fallback: zip multi-part when video clip split is not possible
+                try:
+                    split_parts = await _split_zip_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
+                    split_media_type = "document"
+                    await bot.send_message(user_id, "ℹ️ تقسیم ویدیویی موفق نشد؛ با روش zip چندپارته ارسال می‌کنم.")
+                except Exception as e2:
+                    logger.exception("Fallback zip split also failed")
+                    await bot.send_message(user_id, f"⚠️ تقسیم فایل برای بله ناموفق بود: {str(e2)[:140]}")
+        finally:
+            _ACTIVE_SPLIT_JOBS.discard(split_job_key)
 
     if split_parts:
         total = len(split_parts)
