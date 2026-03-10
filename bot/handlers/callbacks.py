@@ -96,10 +96,15 @@ async def _split_zip_for_bale(file_path: Path, part_size_mb: int) -> list[Path]:
         raise RuntimeError("raw chunks not created")
 
     zip_parts: list[Path] = []
+    ext = file_path.suffix or ".bin"
     for idx, chunk in enumerate(chunks, start=1):
+        chunk_named = file_path.parent / f"{file_path.stem}.part{idx:03d}{ext}"
+        chunk_named.unlink(missing_ok=True)
+        chunk.rename(chunk_named)
+
         zip_path = file_path.parent / f"{file_path.stem}.bale.part{idx:03d}.zip"
         zip_proc = await asyncio.create_subprocess_exec(
-            "zip", "-j", "-0", str(zip_path), str(chunk),
+            "zip", "-j", "-0", str(zip_path), str(chunk_named),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -107,6 +112,7 @@ async def _split_zip_for_bale(file_path: Path, part_size_mb: int) -> list[Path]:
         if zip_proc.returncode != 0 or not zip_path.exists():
             raise RuntimeError(zip_err.decode(errors="ignore")[:300] or "zip chunk failed")
         zip_parts.append(zip_path)
+        chunk_named.unlink(missing_ok=True)
 
     for c in chunks:
         c.unlink(missing_ok=True)
@@ -182,6 +188,17 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
         bale_ok = await bale_bridge_service.forward_file(bale_send_path, media_for_send, caption="Night bridge")
 
     await bot.send_message(user_id, "✅ فایل به بله ارسال شد." if bale_ok else "⚠️ ارسال فایل به بله ناموفق بود.")
+
+    if bale_ok and split_parts:
+        ext = bale_target.suffix or ".bin"
+        restore_name = f"restored{ext}"
+        await bot.send_message(
+            user_id,
+            "🧩 راهنمای اتصال پارت‌ها بعد از دانلود از بله:\n"
+            "1) همه zipها را در یک پوشه Extract کن.\n"
+            f"2) داخل همان پوشه CMD باز کن و بزن:\ncopy /b *.part* {restore_name}\n"
+            "3) فایل خروجی را اجرا کن. (اگر ویدیو بود، پسوند mp4 دارد)"
+        )
 
     if slim_tmp and slim_tmp.exists() and not file_cache_service.is_cache_file(slim_tmp):
         slim_tmp.unlink(missing_ok=True)
