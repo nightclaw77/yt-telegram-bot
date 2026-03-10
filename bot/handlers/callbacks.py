@@ -67,33 +67,51 @@ async def _show_settings(callback: CallbackQuery, user_id: int):
 
 
 async def _split_zip_for_bale(file_path: Path, part_size_mb: int) -> list[Path]:
-    """Split a file into multi-part zip pieces (.z01 ... .zip) sized for Bale upload limits."""
-    if shutil.which("zip") is None:
-        raise RuntimeError("zip command not found on server")
+    """Create upload-safe chunks: split raw file, then zip each chunk separately."""
+    if shutil.which("split") is None or shutil.which("zip") is None:
+        raise RuntimeError("split/zip command not found on server")
 
     safe_part_mb = max(5, int(part_size_mb))
-    archive_path = file_path.parent / f"{file_path.stem}.bale.split.zip"
+    # keep headroom for multipart/form-data overhead and Bale quirks
+    chunk_mb = max(4, safe_part_mb - 2)
+    chunk_prefix = file_path.parent / f"{file_path.stem}.bchunk."
 
     # cleanup leftovers
-    for p in file_path.parent.glob(f"{file_path.stem}.bale.split.z*"):
+    for p in file_path.parent.glob(f"{file_path.stem}.bchunk.*"):
         p.unlink(missing_ok=True)
-    archive_path.unlink(missing_ok=True)
+    for p in file_path.parent.glob(f"{file_path.stem}.bale.part*.zip"):
+        p.unlink(missing_ok=True)
 
-    proc = await asyncio.create_subprocess_exec(
-        "zip", "-j", "-0", "-s", f"{safe_part_mb}m", str(archive_path), str(file_path),
+    split_proc = await asyncio.create_subprocess_exec(
+        "split", "-b", f"{chunk_mb}m", "-d", "-a", "3", str(file_path), str(chunk_prefix),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    _, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(stderr.decode(errors="ignore")[:300] or "zip split failed")
+    _, split_err = await split_proc.communicate()
+    if split_proc.returncode != 0:
+        raise RuntimeError(split_err.decode(errors="ignore")[:300] or "split failed")
 
-    parts = sorted(file_path.parent.glob(f"{file_path.stem}.bale.split.z*"))
-    if archive_path.exists():
-        parts.append(archive_path)
-    if not parts:
-        raise RuntimeError("split parts not created")
-    return parts
+    chunks = sorted(file_path.parent.glob(f"{file_path.stem}.bchunk.*"))
+    if not chunks:
+        raise RuntimeError("raw chunks not created")
+
+    zip_parts: list[Path] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        zip_path = file_path.parent / f"{file_path.stem}.bale.part{idx:03d}.zip"
+        zip_proc = await asyncio.create_subprocess_exec(
+            "zip", "-j", "-0", str(zip_path), str(chunk),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, zip_err = await zip_proc.communicate()
+        if zip_proc.returncode != 0 or not zip_path.exists():
+            raise RuntimeError(zip_err.decode(errors="ignore")[:300] or "zip chunk failed")
+        zip_parts.append(zip_path)
+
+    for c in chunks:
+        c.unlink(missing_ok=True)
+
+    return zip_parts
 
 
 async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_type: str, force_send: bool = False):
