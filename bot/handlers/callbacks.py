@@ -24,8 +24,7 @@ youtube_service = YouTubeService()
 download_manager = DownloadManager.get_instance()
 summarizer = SummarizerService()
 _ACTIVE_SPLIT_JOBS: set[str] = set()
-# Temporary stability mode: zip-part split is primary until clip splitter is fully stabilized.
-ENABLE_VIDEO_CLIP_SPLIT = False
+ENABLE_VIDEO_CLIP_SPLIT = True
 
 
 def _canonical_video_ref(url: str) -> str:
@@ -70,15 +69,15 @@ async def _show_settings(callback: CallbackQuery, user_id: int):
 
 
 async def _split_video_for_bale(file_path: Path, part_size_mb: int) -> list[Path]:
-    """Split oversized MP4 into playable MP4 clips with controlled part count and size."""
+    """Split oversized MP4 into playable clips with bounded part count and size checks."""
     if shutil.which("ffprobe") is None or shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg/ffprobe command not found on server")
 
     safe_part_mb = max(5, int(part_size_mb))
     max_part_bytes = safe_part_mb * 1024 * 1024
     target_bytes = max(4 * 1024 * 1024, int((safe_part_mb - 2) * 1024 * 1024))
-    file_size = file_path.stat().st_size
 
+    # Probe duration
     probe = await asyncio.create_subprocess_exec(
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", str(file_path),
@@ -90,62 +89,70 @@ async def _split_video_for_bale(file_path: Path, part_size_mb: int) -> list[Path
         duration = float((out or b"0").decode().strip() or "0")
     except Exception:
         duration = 0.0
-
     if duration <= 0:
-        raise RuntimeError("could not detect video duration for splitting")
+        raise RuntimeError("could not detect video duration")
 
-    # Start from expected part count based on size; increase only if needed.
+    # Normalize once for more predictable segmentation
+    normalized = file_path.parent / f"{file_path.stem}.norm.mp4"
+    normalized.unlink(missing_ok=True)
+    norm_proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-y", "-i", str(file_path),
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "31",
+        "-g", "48", "-keyint_min", "48",
+        "-c:a", "aac", "-b:a", "64k",
+        "-movflags", "+faststart",
+        str(normalized),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, norm_err = await norm_proc.communicate()
+    if norm_proc.returncode != 0 or not normalized.exists():
+        raise RuntimeError(norm_err.decode(errors="ignore")[:300] or "normalization failed")
+
+    file_size = normalized.stat().st_size
     parts = max(1, int((file_size + target_bytes - 1) // target_bytes))
 
-    for _ in range(6):
-        if parts > 20:
-            raise RuntimeError("required part count is too high for stable clip split")
-        for p in file_path.parent.glob(f"{file_path.stem}.clip*.mp4"):
-            p.unlink(missing_ok=True)
+    try:
+        for _ in range(6):
+            if parts > 20:
+                raise RuntimeError("required part count is too high")
 
-        seg_seconds = max(3, int((duration / parts) + 0.999))
+            for p in file_path.parent.glob(f"{file_path.stem}.clip*.mp4"):
+                p.unlink(missing_ok=True)
 
-        produced: list[Path] = []
-        ok = True
-        for idx in range(parts):
-            start = idx * seg_seconds
-            if start >= duration:
-                break
-            clip_path = file_path.parent / f"{file_path.stem}.clip{idx+1:03d}.mp4"
-            proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-y", "-ss", str(start), "-t", str(seg_seconds), "-i", str(file_path),
-                "-map", "0:v:0", "-map", "0:a:0?",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
-                "-c:a", "aac", "-b:a", "96k",
-                "-movflags", "+faststart",
-                str(clip_path),
+            seg_seconds = max(5, int((duration / parts) + 0.999))
+            pattern = str(file_path.parent / f"{file_path.stem}.clip%03d.mp4")
+            seg_proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", str(normalized),
+                "-c", "copy", "-map", "0",
+                "-f", "segment", "-segment_time", str(seg_seconds),
+                "-reset_timestamps", "1",
+                pattern,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            _, err = await proc.communicate()
-            if proc.returncode != 0 or not clip_path.exists():
-                ok = False
-                logger.warning("ffmpeg clip split failed: %s", err.decode(errors="ignore")[:200])
-                break
-            produced.append(clip_path)
+            _, seg_err = await seg_proc.communicate()
+            if seg_proc.returncode != 0:
+                raise RuntimeError(seg_err.decode(errors="ignore")[:300] or "segment split failed")
 
-        if not ok or not produced:
-            for c in produced:
+            clips = sorted(file_path.parent.glob(f"{file_path.stem}.clip*.mp4"))
+            if not clips:
+                raise RuntimeError("no clips were created")
+
+            too_big = [c.stat().st_size for c in clips if c.stat().st_size > max_part_bytes]
+            if not too_big:
+                return clips
+
+            for c in clips:
                 c.unlink(missing_ok=True)
-            raise RuntimeError("video clip split failed")
+            worst = max(too_big)
+            scale = max(1, int((worst + max_part_bytes - 1) // max_part_bytes))
+            parts = max(parts + 1, parts * scale)
 
-        too_big_sizes = [c.stat().st_size for c in produced if c.stat().st_size > max_part_bytes]
-        if not too_big_sizes:
-            return produced
-
-        for c in produced:
-            c.unlink(missing_ok=True)
-        # Increase part count based on worst overflow ratio.
-        worst = max(too_big_sizes)
-        scale = max(1, int((worst + max_part_bytes - 1) // max_part_bytes))
-        parts = max(parts + 1, parts * scale)
-
-    raise RuntimeError("could not make upload-safe video clips within retry budget")
+        raise RuntimeError("could not make upload-safe clips within retry budget")
+    finally:
+        normalized.unlink(missing_ok=True)
 
 
 async def _split_zip_for_bale(file_path: Path, part_size_mb: int) -> list[Path]:
@@ -542,7 +549,10 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
         )
         await handle_live_capture_inline(callback, url, bot)
 
-    await callback.answer()
+    try:
+        await callback.answer()
+    except Exception:
+        pass
 
 
 async def show_video_options_by_id(user_id: int, url: str, bot: Bot):
