@@ -1,6 +1,7 @@
 """Callback query handlers for Telegram bot."""
 import asyncio
 import logging
+import shutil
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from aiogram import Router, Bot
@@ -65,6 +66,36 @@ async def _show_settings(callback: CallbackQuery, user_id: int):
     await callback.message.edit_text("⚙️ Settings updated.", reply_markup=kb)
 
 
+async def _split_zip_for_bale(file_path: Path, part_size_mb: int) -> list[Path]:
+    """Split a file into multi-part zip pieces (.z01 ... .zip) sized for Bale upload limits."""
+    if shutil.which("zip") is None:
+        raise RuntimeError("zip command not found on server")
+
+    safe_part_mb = max(5, int(part_size_mb))
+    archive_path = file_path.parent / f"{file_path.stem}.bale.split.zip"
+
+    # cleanup leftovers
+    for p in file_path.parent.glob(f"{file_path.stem}.bale.split.z*"):
+        p.unlink(missing_ok=True)
+    archive_path.unlink(missing_ok=True)
+
+    proc = await asyncio.create_subprocess_exec(
+        "zip", "-j", "-0", "-s", f"{safe_part_mb}m", str(archive_path), str(file_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(stderr.decode(errors="ignore")[:300] or "zip split failed")
+
+    parts = sorted(file_path.parent.glob(f"{file_path.stem}.bale.split.z*"))
+    if archive_path.exists():
+        parts.append(archive_path)
+    if not parts:
+        raise RuntimeError("split parts not created")
+    return parts
+
+
 async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_type: str, force_send: bool = False):
     settings = await _get_user_settings(user_id)
     mode = settings.get("bale_mode", "auto")
@@ -104,14 +135,43 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
             bale_send_path = zipped
             secure_tmp = zipped
 
-    media_for_send = "document" if str(bale_send_path).endswith(".zip") else media_type
-    bale_ok = await bale_bridge_service.forward_file(bale_send_path, media_for_send, caption="Night bridge")
+    split_parts: list[Path] = []
+    bale_target = Path(bale_send_path)
+    bale_max_bytes = config.BALE_SAFE_MAX_MB * 1024 * 1024
+
+    if bale_target.exists() and bale_target.stat().st_size > bale_max_bytes:
+        try:
+            await bot.send_message(
+                user_id,
+                f"ℹ️ فایل از سقف آپلود بله بزرگ‌تره ({bale_target.stat().st_size / (1024*1024):.1f}MB). در حال تبدیل به zip چندپارته..."
+            )
+            split_parts = await _split_zip_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
+        except Exception as e:
+            logger.exception("Failed to create split zip for Bale")
+            await bot.send_message(user_id, f"⚠️ تقسیم فایل برای بله ناموفق بود: {str(e)[:140]}")
+
+    if split_parts:
+        total = len(split_parts)
+        bale_ok = True
+        for i, part in enumerate(split_parts, start=1):
+            cap = f"Night bridge part {i}/{total}"
+            ok = await bale_bridge_service.forward_file(part, "document", caption=cap)
+            if not ok:
+                bale_ok = False
+                break
+    else:
+        media_for_send = "document" if str(bale_send_path).endswith(".zip") else media_type
+        bale_ok = await bale_bridge_service.forward_file(bale_send_path, media_for_send, caption="Night bridge")
+
     await bot.send_message(user_id, "✅ فایل به بله ارسال شد." if bale_ok else "⚠️ ارسال فایل به بله ناموفق بود.")
 
     if slim_tmp and slim_tmp.exists() and not file_cache_service.is_cache_file(slim_tmp):
         slim_tmp.unlink(missing_ok=True)
     if secure_tmp and secure_tmp.exists() and not file_cache_service.is_cache_file(secure_tmp):
         secure_tmp.unlink(missing_ok=True)
+    for p in split_parts:
+        if p.exists() and not file_cache_service.is_cache_file(p):
+            p.unlink(missing_ok=True)
 
 
 async def show_quality_options(user_id: int, url: str, mode: str, bot: Bot):

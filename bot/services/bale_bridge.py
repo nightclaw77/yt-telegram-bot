@@ -100,7 +100,7 @@ class BaleBridgeService:
                     if int(data.get("error_code", 0)) >= 500 and attempt < 2:
                         await asyncio.sleep(1.5 * (attempt + 1))
                         continue
-                    return False
+                    break
             except Exception:
                 logger.exception("Bale forward failed (attempt %s)", attempt + 1)
                 if attempt < 2:
