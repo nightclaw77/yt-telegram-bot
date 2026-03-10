@@ -66,6 +66,55 @@ async def _show_settings(callback: CallbackQuery, user_id: int):
     await callback.message.edit_text("⚙️ Settings updated.", reply_markup=kb)
 
 
+async def _split_video_for_bale(file_path: Path, part_size_mb: int) -> list[Path]:
+    """Split oversized MP4 into playable MP4 clips under Bale limit (best effort)."""
+    if shutil.which("ffprobe") is None or shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg/ffprobe command not found on server")
+
+    safe_part_mb = max(5, int(part_size_mb))
+    target_bytes = max(4 * 1024 * 1024, int((safe_part_mb - 2) * 1024 * 1024))
+    file_size = file_path.stat().st_size
+
+    probe = await asyncio.create_subprocess_exec(
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", str(file_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, _ = await probe.communicate()
+    try:
+        duration = float((out or b"0").decode().strip() or "0")
+    except Exception:
+        duration = 0.0
+
+    if duration <= 0:
+        raise RuntimeError("could not detect video duration for splitting")
+
+    seg_seconds = max(8, int((target_bytes / max(file_size, 1)) * duration * 0.9))
+
+    for p in file_path.parent.glob(f"{file_path.stem}.clip*.mp4"):
+        p.unlink(missing_ok=True)
+
+    out_pattern = str(file_path.parent / f"{file_path.stem}.clip%03d.mp4")
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-y", "-i", str(file_path),
+        "-c", "copy", "-map", "0", "-f", "segment",
+        "-segment_time", str(seg_seconds), "-reset_timestamps", "1",
+        out_pattern,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, err = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(err.decode(errors="ignore")[:300] or "video split failed")
+
+    clips = sorted(file_path.parent.glob(f"{file_path.stem}.clip*.mp4"))
+    if not clips:
+        raise RuntimeError("video clips were not created")
+
+    return clips
+
+
 async def _split_zip_for_bale(file_path: Path, part_size_mb: int) -> list[Path]:
     """Create upload-safe chunks: split raw file, then zip each chunk separately."""
     if shutil.which("split") is None or shutil.which("zip") is None:
@@ -160,18 +209,28 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
             secure_tmp = zipped
 
     split_parts: list[Path] = []
+    split_media_type = "document"
     bale_target = Path(bale_send_path)
     bale_max_bytes = config.BALE_SAFE_MAX_MB * 1024 * 1024
 
     if bale_target.exists() and bale_target.stat().st_size > bale_max_bytes:
         try:
-            await bot.send_message(
-                user_id,
-                f"ℹ️ فایل از سقف آپلود بله بزرگ‌تره ({bale_target.stat().st_size / (1024*1024):.1f}MB). در حال تبدیل به zip چندپارته..."
-            )
-            split_parts = await _split_zip_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
+            if media_type == "video" and bale_target.suffix.lower() == ".mp4":
+                await bot.send_message(
+                    user_id,
+                    f"ℹ️ فایل بزرگه ({bale_target.stat().st_size / (1024*1024):.1f}MB). در حال تقسیم به کلیپ‌های MP4..."
+                )
+                split_parts = await _split_video_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
+                split_media_type = "video"
+            else:
+                await bot.send_message(
+                    user_id,
+                    f"ℹ️ فایل از سقف آپلود بله بزرگ‌تره ({bale_target.stat().st_size / (1024*1024):.1f}MB). در حال تبدیل به zip چندپارته..."
+                )
+                split_parts = await _split_zip_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
+                split_media_type = "document"
         except Exception as e:
-            logger.exception("Failed to create split zip for Bale")
+            logger.exception("Failed to split file for Bale")
             await bot.send_message(user_id, f"⚠️ تقسیم فایل برای بله ناموفق بود: {str(e)[:140]}")
 
     if split_parts:
@@ -179,7 +238,7 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
         bale_ok = True
         for i, part in enumerate(split_parts, start=1):
             cap = f"Night bridge part {i}/{total}"
-            ok = await bale_bridge_service.forward_file(part, "document", caption=cap)
+            ok = await bale_bridge_service.forward_file(part, split_media_type, caption=cap)
             if not ok:
                 bale_ok = False
                 break
@@ -189,7 +248,7 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
 
     await bot.send_message(user_id, "✅ فایل به بله ارسال شد." if bale_ok else "⚠️ ارسال فایل به بله ناموفق بود.")
 
-    if bale_ok and split_parts:
+    if bale_ok and split_parts and split_media_type == "document":
         ext = bale_target.suffix or ".bin"
         restore_name = f"restored{ext}"
         await bot.send_message(
