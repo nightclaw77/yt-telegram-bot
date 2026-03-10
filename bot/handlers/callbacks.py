@@ -90,16 +90,20 @@ async def _split_video_for_bale(file_path: Path, part_size_mb: int) -> list[Path
     if duration <= 0:
         raise RuntimeError("could not detect video duration for splitting")
 
-    seg_seconds = max(8, int((target_bytes / max(file_size, 1)) * duration * 0.9))
+    seg_seconds = max(8, min(20, int((target_bytes / max(file_size, 1)) * duration * 0.85)))
 
     for p in file_path.parent.glob(f"{file_path.stem}.clip*.mp4"):
         p.unlink(missing_ok=True)
 
     out_pattern = str(file_path.parent / f"{file_path.stem}.clip%03d.mp4")
+    # Re-encode with conservative settings so each segment stays upload-safe.
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-y", "-i", str(file_path),
-        "-c", "copy", "-map", "0", "-f", "segment",
-        "-segment_time", str(seg_seconds), "-reset_timestamps", "1",
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+        "-c:a", "aac", "-b:a", "96k",
+        "-f", "segment", "-segment_time", str(seg_seconds),
+        "-reset_timestamps", "1",
         out_pattern,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -111,6 +115,12 @@ async def _split_video_for_bale(file_path: Path, part_size_mb: int) -> list[Path
     clips = sorted(file_path.parent.glob(f"{file_path.stem}.clip*.mp4"))
     if not clips:
         raise RuntimeError("video clips were not created")
+
+    # If any segment is still too large, fail fast to trigger zip fallback path.
+    if any(c.stat().st_size > (safe_part_mb * 1024 * 1024) for c in clips):
+        for c in clips:
+            c.unlink(missing_ok=True)
+        raise RuntimeError("split clips still above Bale limit")
 
     return clips
 
@@ -231,7 +241,14 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
                 split_media_type = "document"
         except Exception as e:
             logger.exception("Failed to split file for Bale")
-            await bot.send_message(user_id, f"⚠️ تقسیم فایل برای بله ناموفق بود: {str(e)[:140]}")
+            # Fallback: zip multi-part when video clip split is not possible
+            try:
+                split_parts = await _split_zip_for_bale(bale_target, config.BALE_SAFE_MAX_MB)
+                split_media_type = "document"
+                await bot.send_message(user_id, "ℹ️ تقسیم ویدیویی موفق نشد؛ با روش zip چندپارته ارسال می‌کنم.")
+            except Exception as e2:
+                logger.exception("Fallback zip split also failed")
+                await bot.send_message(user_id, f"⚠️ تقسیم فایل برای بله ناموفق بود: {str(e2)[:140]}")
 
     if split_parts:
         total = len(split_parts)
