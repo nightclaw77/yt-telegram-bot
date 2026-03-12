@@ -2,6 +2,7 @@
 import asyncio
 import uuid
 import logging
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Callable, Any
@@ -48,6 +49,7 @@ class DownloadManager:
         self._tasks: Dict[str, DownloadTask] = {}
         self._user_tasks: Dict[int, list] = {}
         self._results: Dict[str, asyncio.Future] = {}
+        self._active_keys: Dict[str, str] = {}
     
     @classmethod
     def get_instance(cls) -> "DownloadManager":
@@ -65,6 +67,15 @@ class DownloadManager:
         progress_callback: Optional[Callable] = None
     ) -> str:
         """Add a download to the queue."""
+        dedupe_key = f"{user_id}|{mode}|{format_id}|{url.strip()}"
+        existing_task_id = self._active_keys.get(dedupe_key)
+        if existing_task_id and existing_task_id in self._tasks:
+            existing = self._tasks[existing_task_id]
+            if existing.status in [DownloadStatus.PENDING, DownloadStatus.DOWNLOADING]:
+                if progress_callback:
+                    existing.progress_callback = progress_callback
+                return existing_task_id
+
         task_id = str(uuid.uuid4())
         
         task = DownloadTask(
@@ -75,8 +86,10 @@ class DownloadManager:
             mode=mode,
             progress_callback=progress_callback
         )
+        task.progress["dedupe_key"] = dedupe_key
         
         self._tasks[task_id] = task
+        self._active_keys[dedupe_key] = task_id
         
         if user_id not in self._user_tasks:
             self._user_tasks[user_id] = []
@@ -126,44 +139,69 @@ class DownloadManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
-            download_complete = False
-            progress_percent = 0
-            
-            # Monitor progress - read stderr for progress info
-            while process.returncode is None:
-                await asyncio.sleep(2)
-                
-                # Update progress - simplified progress
-                progress_percent = min(progress_percent + 5, 90)
-                
-                if task.progress_callback:
-                    try:
-                        if asyncio.iscoroutinefunction(task.progress_callback):
-                            await task.progress_callback({
-                                "percent": progress_percent,
-                                "speed": "Checking...",
-                                "eta": "Calculating..."
-                            })
-                        else:
-                            task.progress_callback({
-                                "percent": progress_percent,
-                                "speed": "Checking...",
-                                "eta": "Calculating..."
-                            })
-                    except Exception as e:
-                        logger.warning(f"Progress callback error: {e}")
-                
-                # Check if cancelled
-                if task.task_id in self._tasks:
-                    if self._tasks[task.task_id].status == DownloadStatus.CANCELLED:
-                        process.terminate()
-                        task.status = DownloadStatus.CANCELLED
-                        self._results[task.task_id].set_result(None)
-                        return
-                else:
+
+            progress_percent = 0.0
+            last_stage = "starting"
+
+            async def emit_progress(percent: float, speed: str = "N/A", eta: str = "N/A", stage: Optional[str] = None):
+                if not task.progress_callback:
+                    return
+                payload = {
+                    "percent": percent,
+                    "speed": speed,
+                    "eta": eta,
+                    "stage": stage or last_stage,
+                }
+                try:
+                    if asyncio.iscoroutinefunction(task.progress_callback):
+                        await task.progress_callback(payload)
+                    else:
+                        task.progress_callback(payload)
+                except Exception as e:
+                    logger.warning(f"Progress callback error: {e}")
+
+            while True:
+                line = await process.stderr.readline()
+                if not line:
                     break
-            
+                text = line.decode(errors="ignore").strip()
+
+                m = re.search(r"\[download\]\s+([0-9.]+)%.*?at\s+([^\s]+).*?ETA\s+([^\s]+)", text)
+                if m:
+                    progress_percent = float(m.group(1))
+                    last_stage = "downloading"
+                    await emit_progress(progress_percent, m.group(2), m.group(3), last_stage)
+                    continue
+
+                m = re.search(r"\[download\]\s+([0-9.]+)%", text)
+                if m:
+                    progress_percent = float(m.group(1))
+                    last_stage = "downloading"
+                    await emit_progress(progress_percent, "N/A", "N/A", last_stage)
+                    continue
+
+                if "Destination:" in text or "Merger" in text:
+                    last_stage = "finalizing"
+                    await emit_progress(max(progress_percent, 92.0), "Processing...", "Finalizing", last_stage)
+                    continue
+
+                if "Extracting audio" in text or "Post-process file" in text:
+                    last_stage = "converting"
+                    await emit_progress(max(progress_percent, 94.0), "FFmpeg", "Converting", last_stage)
+                    continue
+
+                if "Deleting original file" in text:
+                    last_stage = "cleaning"
+                    await emit_progress(max(progress_percent, 98.0), "Cleanup", "Almost done", last_stage)
+                    continue
+
+                # Check if cancelled while running
+                if task.task_id in self._tasks and self._tasks[task.task_id].status == DownloadStatus.CANCELLED:
+                    process.terminate()
+                    task.status = DownloadStatus.CANCELLED
+                    self._results[task.task_id].set_result(None)
+                    return
+
             stdout, stderr = await process.communicate()
             
             if process.returncode == 0:
@@ -174,22 +212,7 @@ class DownloadManager:
                     task.status = DownloadStatus.COMPLETED
                     
                     # Final progress update
-                    if task.progress_callback:
-                        try:
-                            if asyncio.iscoroutinefunction(task.progress_callback):
-                                await task.progress_callback({
-                                    "percent": 100,
-                                    "speed": "Done!",
-                                    "eta": "0s"
-                                })
-                            else:
-                                task.progress_callback({
-                                    "percent": 100,
-                                    "speed": "Done!",
-                                    "eta": "0s"
-                                })
-                        except:
-                            pass
+                    await emit_progress(100, "Done!", "0s", "completed")
                     
                     self._results[task.task_id].set_result(task.file_path)
                 else:
@@ -226,7 +249,10 @@ class DownloadManager:
         finally:
             # Cleanup
             if task_id in self._tasks:
+                dedupe_key = self._tasks[task_id].progress.get("dedupe_key")
                 del self._tasks[task_id]
+                if dedupe_key and self._active_keys.get(dedupe_key) == task_id:
+                    del self._active_keys[dedupe_key]
             if task_id in self._results:
                 del self._results[task_id]
     

@@ -991,11 +991,20 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
     
     async def progress_callback(progress: dict):
         percent = progress.get("percent", 0)
+        stage = progress.get("stage", "downloading")
+        stage_text = {
+            "starting": "Starting...",
+            "downloading": "Downloading audio...",
+            "finalizing": "Finalizing file...",
+            "converting": "Converting to MP3...",
+            "cleaning": "Cleaning up...",
+            "completed": "Done!",
+        }.get(stage, "Processing...")
         try:
             await bot.edit_message_text(
                 chat_id=user_id,
                 message_id=status_msg.message_id,
-                text=f"🎵 Downloading audio... {percent:.1f}%"
+                text=f"🎵 {stage_text} {percent:.1f}%"
             )
         except Exception:
             pass
