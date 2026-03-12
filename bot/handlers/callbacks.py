@@ -995,6 +995,8 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
         stage_text = {
             "starting": "Starting...",
             "downloading": "Downloading audio...",
+            "live-audio-source": "Preparing live audio...",
+            "live-fragments": "Fetching live fragments...",
             "finalizing": "Finalizing file...",
             "converting": "Converting to MP3...",
             "cleaning": "Cleaning up...",

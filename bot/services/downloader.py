@@ -67,6 +67,14 @@ class DownloadManager:
         progress_callback: Optional[Callable] = None
     ) -> str:
         """Add a download to the queue."""
+        # Hard-stop duplicate/concurrent downloads per user while one is active.
+        existing_active = self.get_user_active_downloads(user_id)
+        if existing_active:
+            existing = existing_active[0]
+            if progress_callback:
+                existing.progress_callback = progress_callback
+            return existing.task_id
+
         dedupe_key = f"{user_id}|{mode}|{format_id}|{url.strip()}"
         existing_task_id = self._active_keys.get(dedupe_key)
         if existing_task_id and existing_task_id in self._tasks:
@@ -131,6 +139,18 @@ class DownloadManager:
                 cmd.extend(["-x", "--audio-format", "mp3"])
             elif task.mode == "live":
                 cmd.extend(["--live-from-start"])
+
+            # Probe metadata first so we can handle live/fragmented sources honestly.
+            probe_cmd = ["yt-dlp", "--dump-single-json", "--skip-download", "--no-warnings", task.url]
+            try:
+                import json as _json
+                probe_raw = await asyncio.to_thread(lambda: __import__('subprocess').check_output(probe_cmd, text=True, timeout=45, stderr=__import__('subprocess').STDOUT))
+                meta = _json.loads(probe_raw)
+                live_status = meta.get("live_status")
+                if task.mode == "audio" and live_status in {"is_live", "post_live"}:
+                    task.progress["live_source"] = True
+            except Exception:
+                pass
             
             logger.info(f"Starting download: {' '.join(cmd)}")
             
@@ -178,6 +198,11 @@ class DownloadManager:
                     progress_percent = float(m.group(1))
                     last_stage = "downloading"
                     await emit_progress(progress_percent, "N/A", "N/A", last_stage)
+                    continue
+
+                if task.progress.get("live_source") and progress_percent >= 90:
+                    last_stage = "live-fragments"
+                    await emit_progress(progress_percent, "Live source", "Collecting fragments", last_stage)
                     continue
 
                 if "Destination:" in text or "Merger" in text:
