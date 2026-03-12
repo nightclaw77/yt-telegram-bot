@@ -52,27 +52,32 @@ class AudioCompressionService:
             return None
 
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
-        output_ext = "m4a"
+        output_ext = "opus"
         output_path = self.downloads_dir / f"cmp_audio_{uuid.uuid4().hex[:10]}.{output_ext}"
 
-        # AAC/M4A gives materially better size/quality tradeoff than MP3 for Telegram music/audio uploads.
-        # Preserve as much quality as possible while still shrinking.
+        # Opus gives a much better size/quality tradeoff for speech/news content than AAC/MP3.
         effective_sr = min(source_sr, sample_rate)
         effective_channels = min(source_channels, channels)
-        if target_bitrate_k <= 48:
+        if target_bitrate_k <= 32:
+            effective_sr = min(effective_sr, 24000)
+            effective_channels = 1
+        elif target_bitrate_k <= 48:
             effective_sr = min(effective_sr, 32000)
             effective_channels = 1
-        elif target_bitrate_k <= 64:
-            effective_sr = min(effective_sr, 44100)
+        else:
+            effective_sr = min(effective_sr, 48000)
             effective_channels = min(effective_channels, 2)
 
         cmd = [
             "ffmpeg", "-y", "-i", str(input_path),
             "-map", "a:0",
             "-vn",
-            "-c:a", "aac",
+            "-c:a", "libopus",
+            "-application", "audio",
+            "-vbr", "on",
+            "-compression_level", "10",
+            "-frame_duration", "60",
             "-b:a", f"{target_bitrate_k}k",
-            "-movflags", "+faststart",
             "-ar", str(effective_sr),
             "-ac", str(effective_channels),
             str(output_path)

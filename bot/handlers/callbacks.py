@@ -1041,8 +1041,8 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
             
             from bot.services.audio_compressor import AudioCompressionService
             settings = await _get_user_settings(user_id)
-            bitrate_map = {"low": 32, "medium": 48, "high": 64}
-            bitrate = bitrate_map.get(settings.get("compression_level", "medium"), 48)
+            bitrate_map = {"low": 24, "medium": 32, "high": 48}
+            bitrate = bitrate_map.get(settings.get("compression_level", "medium"), 32)
             audio_compressor = AudioCompressionService()
             compressed_path = await audio_compressor.compress_audio(Path(path), target_bitrate_k=bitrate)
             
