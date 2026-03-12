@@ -1068,6 +1068,17 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
                     )
                 except:
                     pass
+            else:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=status_msg.message_id,
+                        text="🎵 <b>Keeping original audio</b>\n"
+                             "Compression was skipped because it would not reduce size enough.\n"
+                             "📤 Uploading..."
+                    )
+                except:
+                    pass
         
         # Cache non-compressed output for reuse
         if not compress and not file_cache_service.is_cache_file(final_path):
