@@ -187,11 +187,11 @@ def create_inline_result(video_info: dict) -> InlineQueryResultArticle:
         thumbnail_url=thumbnail,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎬 Download 📥", callback_data=shorten_callback("select_format", video_url, "video")),
-                InlineKeyboardButton(text="🎵 Audio 🎧", callback_data=shorten_callback("select_format", video_url, "audio"))
+                InlineKeyboardButton(text="🔵 Video", callback_data=shorten_callback("select_format", video_url, "video")),
+                InlineKeyboardButton(text="🟣 Audio", callback_data=shorten_callback("select_format", video_url, "audio"))
             ],
             [
-                InlineKeyboardButton(text="📝 AI Summary 🤖", callback_data=shorten_callback("summary", video_url, "xl"))
+                InlineKeyboardButton(text="🤖 Summary", callback_data=shorten_callback("summary", video_url, "xl"))
             ]
         ])
     )
@@ -236,11 +236,11 @@ def create_inline_result_from_search(video: dict) -> InlineQueryResultArticle:
         thumbnail_url=thumbnail,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎬 Download 📥", callback_data=shorten_callback("select_format", video_url, "video")),
-                InlineKeyboardButton(text="🎵 Audio 🎧", callback_data=shorten_callback("select_format", video_url, "audio"))
+                InlineKeyboardButton(text="🔵 Video", callback_data=shorten_callback("select_format", video_url, "video")),
+                InlineKeyboardButton(text="🟣 Audio", callback_data=shorten_callback("select_format", video_url, "audio"))
             ],
             [
-                InlineKeyboardButton(text="📝 AI Summary 🤖", callback_data=shorten_callback("summary", video_url, "xl"))
+                InlineKeyboardButton(text="🤖 Summary", callback_data=shorten_callback("summary", video_url, "xl"))
             ]
         ])
     )

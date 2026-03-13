@@ -45,6 +45,21 @@ def _audio_download_format(profile: str | None) -> str:
     return f"bestaudio||{bitrate}"
 
 
+VIDEO_QUALITY_TO_FORMAT = {
+    # Prefer direct download of the requested ceiling from YouTube/CDN.
+    # Only fall back to lower/best muxed streams when exact adaptive combos are unavailable.
+    "2160": "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best",
+    "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "720": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "480": "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+    "best": "bestvideo+bestaudio/best",
+}
+
+
+def _resolve_video_format(quality: str | None) -> str:
+    return VIDEO_QUALITY_TO_FORMAT.get((quality or "best").strip().lower(), VIDEO_QUALITY_TO_FORMAT["best"])
+
+
 def _canonical_video_ref(url: str) -> str:
     """Normalize YouTube URL to stable cache key based on video id when possible."""
     try:
@@ -374,15 +389,15 @@ async def show_quality_options(user_id: int, url: str, mode: str, bot: Bot):
         # Video quality options
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🖥️ 4K (2160p)", callback_data=shorten_callback("dl_video", url, "2160")),
-                InlineKeyboardButton(text="🖥️ 1080p", callback_data=shorten_callback("dl_video", url, "1080"))
+                InlineKeyboardButton(text="🎬 4K Direct", callback_data=shorten_callback("dl_video", url, "2160", "0")),
+                InlineKeyboardButton(text="🎬 1080p Direct", callback_data=shorten_callback("dl_video", url, "1080", "0"))
             ],
             [
-                InlineKeyboardButton(text="🖥️ 720p", callback_data=shorten_callback("dl_video", url, "720")),
-                InlineKeyboardButton(text="🖥️ 480p", callback_data=shorten_callback("dl_video", url, "480"))
+                InlineKeyboardButton(text="🎬 720p Direct", callback_data=shorten_callback("dl_video", url, "720", "0")),
+                InlineKeyboardButton(text="🎬 480p Direct", callback_data=shorten_callback("dl_video", url, "480", "0"))
             ],
             [
-                InlineKeyboardButton(text="⚡ Best Available", callback_data=shorten_callback("dl_video", url, "best")),
+                InlineKeyboardButton(text="🔵 Best Direct", callback_data=shorten_callback("dl_video", url, "best", "0")),
             ],
             [
                 InlineKeyboardButton(text="🎵 Audio Only (MP3)", callback_data=shorten_callback("select_format", url, "audio"))
@@ -535,15 +550,8 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
         quality = parts[2] if len(parts) > 2 else "best"
         compress = parts[3] if len(parts) > 3 else "0"
         
-        # Map shorthand quality to yt-dlp format
-        format_map = {
-            "2160": "bestvideo[height<=2160]",
-            "1080": "bestvideo[height<=1080]+bestaudio/best",
-            "720": "bestvideo[height<=720]+bestaudio/best",
-            "480": "bestvideo[height<=480]+bestaudio/best",
-            "best": "best"
-        }
-        format_id = format_map.get(quality, "best")
+        # Prefer direct YouTube formats for the selected resolution.
+        format_id = _resolve_video_format(quality)
         
         # Send to user's DM instead of trying to reply to inline message
         await bot.send_message(
