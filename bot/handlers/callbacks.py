@@ -27,6 +27,24 @@ _ACTIVE_SPLIT_JOBS: set[str] = set()
 ENABLE_VIDEO_CLIP_SPLIT = True
 
 
+AUDIO_PROFILE_TO_MP3_BITRATE = {
+    "best": 128,
+    "128": 128,
+    "320": 320,
+}
+
+
+def _resolve_audio_profile(profile: str | None) -> tuple[str, int]:
+    normalized = (profile or "best").strip().lower()
+    bitrate = AUDIO_PROFILE_TO_MP3_BITRATE.get(normalized, 128)
+    return normalized, bitrate
+
+
+def _audio_download_format(profile: str | None) -> str:
+    _, bitrate = _resolve_audio_profile(profile)
+    return f"bestaudio||{bitrate}"
+
+
 def _canonical_video_ref(url: str) -> str:
     """Normalize YouTube URL to stable cache key based on video id when possible."""
     try:
@@ -225,7 +243,7 @@ async def _send_or_offer_bale(user_id: int, bot: Bot, local_path: str, media_typ
         await bot.send_message(user_id, f"ℹ️ فایل برای بله بزرگ بود ({work_path.stat().st_size / (1024*1024):.1f}MB). نسخه سبک‌تر می‌سازم...")
         from bot.services.audio_compressor import AudioCompressionService
         ac = AudioCompressionService()
-        slim = await ac.compress_audio(work_path, target_bitrate_k=32, sample_rate=22050, channels=1)
+        slim = await ac.compress_audio(work_path, target_bitrate_k=32, sample_rate=24000, channels=1)
         if slim:
             work_path = slim
             slim_tmp = slim
@@ -336,8 +354,12 @@ async def show_quality_options(user_id: int, url: str, mode: str, bot: Bot):
         # Audio options
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎵 MP3 (128k)", callback_data=shorten_callback("dl_audio", url, "bestaudio")),
-                InlineKeyboardButton(text="🎵 MP3 (320k)", callback_data=shorten_callback("dl_audio", url, "bestaudio+"))
+                InlineKeyboardButton(text="🎵 MP3 (128k)", callback_data=shorten_callback("dl_audio", url, "128", "0")),
+                InlineKeyboardButton(text="🎵 MP3 (320k)", callback_data=shorten_callback("dl_audio", url, "320", "0"))
+            ],
+            [
+                InlineKeyboardButton(text="🗜 128k → سبک‌تر", callback_data=shorten_callback("dl_audio", url, "128", "1")),
+                InlineKeyboardButton(text="🗜 320k → سبک‌تر", callback_data=shorten_callback("dl_audio", url, "320", "1"))
             ],
             [
                 InlineKeyboardButton(text="🔙 Back", callback_data=shorten_callback("select_format", url, "video"))
@@ -530,12 +552,14 @@ async def handle_callback(callback: CallbackQuery, bot: Bot):
         )
         await handle_video_download_inline(callback, url, format_id, compress == "1", bot)
     elif action == "dl_audio":
+        audio_profile = parts[2] if len(parts) > 2 else "best"
         compress = parts[3] if len(parts) > 3 else "0"
+        _, bitrate = _resolve_audio_profile(audio_profile)
         await bot.send_message(
             chat_id=callback.from_user.id,
-            text="⏳ Extracting audio..."
+            text=f"⏳ Extracting audio ({bitrate}k MP3)..."
         )
-        await handle_audio_download_inline(callback, url, compress == "1", bot)
+        await handle_audio_download_inline(callback, url, audio_profile, compress == "1", bot)
     elif action == "summary":
         await bot.send_message(
             chat_id=callback.from_user.id,
@@ -570,7 +594,7 @@ async def show_video_options_by_id(user_id: int, url: str, bot: Bot):
             InlineKeyboardButton(text="🎬 Video (720p)", callback_data=shorten_callback("dl_video", url, "720"))
         ],
         [
-            InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=shorten_callback("dl_audio", url, "bestaudio")),
+            InlineKeyboardButton(text="🎵 Audio (MP3 128k)", callback_data=shorten_callback("dl_audio", url, "128", "0")),
             InlineKeyboardButton(text="📝 AI Summary", callback_data=shorten_callback("summary", url, "xl"))
         ]
     ]
@@ -660,7 +684,7 @@ async def handle_video_download(callback: CallbackQuery, url: str, format_id: st
     await status_msg.delete()
 
 
-async def handle_audio_download(callback: CallbackQuery, url: str, bot: Bot):
+async def handle_audio_download(callback: CallbackQuery, url: str, audio_profile: str, bot: Bot):
     """Handle audio download."""
     status_msg = await callback.message.answer("⏳ Downloading audio...")
     
@@ -680,7 +704,7 @@ async def handle_audio_download(callback: CallbackQuery, url: str, bot: Bot):
     task_id = download_manager.add_download(
         user_id=callback.from_user.id,
         url=url,
-        format_id="bestaudio",
+        format_id=_audio_download_format(audio_profile),
         mode="audio",
         progress_callback=progress_callback
     )
@@ -984,7 +1008,7 @@ async def handle_video_download_inline(callback: CallbackQuery, url: str, format
         pass
 
 
-async def handle_audio_download_inline(callback: CallbackQuery, url: str, compress: bool, bot: Bot):
+async def handle_audio_download_inline(callback: CallbackQuery, url: str, audio_profile: str, compress: bool, bot: Bot):
     """Handle audio download for inline mode."""
     user_id = callback.from_user.id
     status_msg = await bot.send_message(user_id, "⏳ Downloading audio...")
@@ -1001,8 +1025,9 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
             pass
     
     cache_ref = _canonical_video_ref(url)
-    base_cache_key = file_cache_service.make_key("yt", "audio", cache_ref, "bestaudio")
-    compressed_cache_key = file_cache_service.make_key("yt", "audio", cache_ref, "bestaudio", "compressed-64k")
+    _, mp3_bitrate = _resolve_audio_profile(audio_profile)
+    base_cache_key = file_cache_service.make_key("yt", "audio", cache_ref, f"mp3-{mp3_bitrate}")
+    compressed_cache_key = file_cache_service.make_key("yt", "audio", cache_ref, f"mp3-{mp3_bitrate}", "compressed-opus")
 
     path = file_cache_service.get(compressed_cache_key if compress else base_cache_key)
     if path:
@@ -1010,7 +1035,7 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
             await bot.edit_message_text(
                 chat_id=user_id,
                 message_id=status_msg.message_id,
-                text="🎵 ♻️ از نسخه کش‌شده استفاده شد\n📤 Uploading..."
+                text=f"🎵 ♻️ از نسخه کش‌شده {mp3_bitrate}k استفاده شد\n📤 Uploading..."
             )
         except Exception:
             pass
@@ -1018,7 +1043,7 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
         task_id = download_manager.add_download(
             user_id=user_id,
             url=url,
-            format_id="bestaudio",
+            format_id=_audio_download_format(audio_profile),
             mode="audio",
             progress_callback=progress_callback
         )
@@ -1096,7 +1121,7 @@ async def handle_audio_download_inline(callback: CallbackQuery, url: str, compre
         
         # Upload with metadata caption
         try:
-            caption = f"🎵 Audio\n"
+            caption = f"🎵 Audio ({mp3_bitrate}k MP3)\n"
             if duration_sec > 0:
                 mins = duration_sec // 60
                 secs = duration_sec % 60

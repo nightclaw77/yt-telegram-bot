@@ -556,8 +556,12 @@ async def show_video_options(message: Message, url: str, bot: Bot):
             InlineKeyboardButton(text="🗜 480p (Compressed)", callback_data=shorten_callback("dl_video", url, "480", "1"))
         ],
         [
-            InlineKeyboardButton(text="🎵 Audio", callback_data=shorten_callback("dl_audio", url, "best", "0")),
-            InlineKeyboardButton(text="🗜 Audio (Compressed)", callback_data=shorten_callback("dl_audio", url, "best", "1"))
+            InlineKeyboardButton(text="🎵 MP3 128k", callback_data=shorten_callback("dl_audio", url, "128", "0")),
+            InlineKeyboardButton(text="🎵 MP3 320k", callback_data=shorten_callback("dl_audio", url, "320", "0"))
+        ],
+        [
+            InlineKeyboardButton(text="🗜 128k → سبک‌تر", callback_data=shorten_callback("dl_audio", url, "128", "1")),
+            InlineKeyboardButton(text="🗜 320k → سبک‌تر", callback_data=shorten_callback("dl_audio", url, "320", "1"))
         ],
         [InlineKeyboardButton(text="📝 AI Summary", callback_data=shorten_callback("summary", url, "xl"))]
     ]

@@ -15,11 +15,18 @@ logger = logging.getLogger(__name__)
 class AudioCompressionService:
     """Compress audio files with ffmpeg."""
 
+    OPUS_SAMPLE_RATES = (48000, 24000, 16000, 12000, 8000)
+
     def __init__(self):
         self.downloads_dir = config.DOWNLOADS_DIR
 
     def _ensure_ffmpeg(self) -> bool:
         return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+
+    def _pick_supported_opus_rate(self, desired_rate: int) -> int:
+        """Pick the nearest libopus-supported sample rate without requesting invalid values."""
+        desired_rate = max(8000, int(desired_rate))
+        return min(self.OPUS_SAMPLE_RATES, key=lambda rate: abs(rate - desired_rate))
 
     async def compress_audio(
         self,
@@ -56,17 +63,19 @@ class AudioCompressionService:
         output_path = self.downloads_dir / f"cmp_audio_{uuid.uuid4().hex[:10]}.{output_ext}"
 
         # Opus gives a much better size/quality tradeoff for speech/news content than AAC/MP3.
-        effective_sr = min(source_sr, sample_rate)
+        desired_sr = min(source_sr, sample_rate)
         effective_channels = min(source_channels, channels)
         if target_bitrate_k <= 32:
-            effective_sr = min(effective_sr, 24000)
+            desired_sr = min(desired_sr, 24000)
             effective_channels = 1
         elif target_bitrate_k <= 48:
-            effective_sr = min(effective_sr, 32000)
+            desired_sr = min(desired_sr, 24000)
             effective_channels = 1
         else:
-            effective_sr = min(effective_sr, 48000)
+            desired_sr = min(desired_sr, 48000)
             effective_channels = min(effective_channels, 2)
+
+        effective_sr = self._pick_supported_opus_rate(max(8000, desired_sr))
 
         cmd = [
             "ffmpeg", "-y", "-i", str(input_path),

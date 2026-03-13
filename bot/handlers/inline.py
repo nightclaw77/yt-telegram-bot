@@ -2,7 +2,6 @@
 import logging
 import hashlib
 import asyncio
-from typing import List
 
 from aiogram import Router, F
 from aiogram.types import InlineQuery, InlineQueryResultArticle, InlineQueryResultCachedPhoto, InputTextMessageContent, InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,6 +9,7 @@ from aiogram.enums import ParseMode
 
 from bot.services.youtube import YouTubeService
 from bot.services.github_apps import github_apps_service
+from bot.utils.url_shortener import shorten_callback
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -72,7 +72,7 @@ async def handle_inline_query(inline_query: InlineQuery):
         # GitHub inline mode: prefix query with `gh `
         if query.lower().startswith("gh "):
             gh_q = query[3:].strip()
-            repos = await github_apps_service.search_repos(gh_q, limit=8)
+            repos = await asyncio.wait_for(github_apps_service.search_repos(gh_q, limit=8), timeout=4.5)
             results = []
             for r in repos:
                 full = r["full_name"]
@@ -96,16 +96,16 @@ async def handle_inline_query(inline_query: InlineQuery):
         # Check if it's a channel URL or search keywords
         elif "youtube.com" in query or "youtu.be" in query:
             # If it's a URL, we'll try to get video info
-            info = await youtube_service.get_video_info(query)
+            info = await asyncio.wait_for(youtube_service.get_video_info(query), timeout=4.5)
             if info:
                 results = [create_inline_result(info)]
             else:
                 # Maybe it's a channel?
-                channel_videos = await youtube_service.get_channel_videos(query, limit=5)
+                channel_videos = await asyncio.wait_for(youtube_service.get_channel_videos(query, limit=5), timeout=4.5)
                 results = [create_inline_result_from_search(v) for v in channel_videos]
         else:
             # Search for videos
-            search_results = await youtube_service.search(query, limit=10)
+            search_results = await asyncio.wait_for(youtube_service.search(query, limit=10), timeout=4.5)
             results = [create_inline_result_from_search(v) for v in search_results]
 
         logger.info(f"Found {len(results)} results for query: {query}")
@@ -126,7 +126,7 @@ async def handle_inline_query(inline_query: InlineQuery):
 
         await inline_query.answer(
             results=results,
-            cache_time=300,
+            cache_time=60,
             is_personal=True
         )
     except Exception as e:
@@ -187,11 +187,11 @@ def create_inline_result(video_info: dict) -> InlineQueryResultArticle:
         thumbnail_url=thumbnail,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎬 Download 📥", callback_data=f"select_format|{video_url}|video"),
-                InlineKeyboardButton(text="🎵 Audio 🎧", callback_data=f"select_format|{video_url}|audio")
+                InlineKeyboardButton(text="🎬 Download 📥", callback_data=shorten_callback("select_format", video_url, "video")),
+                InlineKeyboardButton(text="🎵 Audio 🎧", callback_data=shorten_callback("select_format", video_url, "audio"))
             ],
             [
-                InlineKeyboardButton(text="📝 AI Summary 🤖", callback_data=f"summary|{video_url}|xl")
+                InlineKeyboardButton(text="📝 AI Summary 🤖", callback_data=shorten_callback("summary", video_url, "xl"))
             ]
         ])
     )
@@ -236,11 +236,11 @@ def create_inline_result_from_search(video: dict) -> InlineQueryResultArticle:
         thumbnail_url=thumbnail,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎬 Download 📥", callback_data=f"select_format|{video_url}|video"),
-                InlineKeyboardButton(text="🎵 Audio 🎧", callback_data=f"select_format|{video_url}|audio")
+                InlineKeyboardButton(text="🎬 Download 📥", callback_data=shorten_callback("select_format", video_url, "video")),
+                InlineKeyboardButton(text="🎵 Audio 🎧", callback_data=shorten_callback("select_format", video_url, "audio"))
             ],
             [
-                InlineKeyboardButton(text="📝 AI Summary 🤖", callback_data=f"summary|{video_url}|xl")
+                InlineKeyboardButton(text="📝 AI Summary 🤖", callback_data=shorten_callback("summary", video_url, "xl"))
             ]
         ])
     )

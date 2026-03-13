@@ -102,9 +102,16 @@ class DownloadManager:
                 config.DOWNLOADS_DIR / f"dl_{timestamp}_%(title)s.%(ext)s"
             )
             
+            requested_format = task.format_id
+            audio_quality_k = None
+            if task.mode == "audio" and "||" in requested_format:
+                requested_format, audio_quality = requested_format.split("||", 1)
+                if audio_quality.isdigit():
+                    audio_quality_k = int(audio_quality)
+
             cmd = [
                 "yt-dlp",
-                "-f", task.format_id,
+                "-f", requested_format,
                 "--output", output_template,
                 "--no-playlist",
                 "-v",  # verbose for progress
@@ -113,10 +120,12 @@ class DownloadManager:
             
             if task.mode == "audio":
                 # Prefer direct audio; if unavailable on YouTube/SABR, fall back to a small muxed MP4 instead of huge HLS variants.
-                if task.format_id == "bestaudio":
+                if requested_format == "bestaudio":
                     cmd[2] = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/18/22/best[height<=360]/best"
-                    cmd.extend(["-S", "proto:https"]) 
+                    cmd.extend(["-S", "proto:https"])
                 cmd.extend(["-x", "--audio-format", "mp3"])
+                if audio_quality_k:
+                    cmd.extend(["--audio-quality", f"{audio_quality_k}K"])
             elif task.mode == "live":
                 cmd.extend(["--live-from-start"])
             
